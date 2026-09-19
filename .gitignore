@@ -1,0 +1,32 @@
+# Local environments, tools and editor settings.
+/.venv/
+/.tools/
+/.vscode/
+
+# Python caches and package metadata.
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# LiteX generated gateware, firmware and reports.
+/litex_cyc1000/build/
+/litex_cyc1000/build-*/
+
+# Quartus compilation databases and generated output.
+db/
+incremental_db/
+output_files/
+*.sof
+*.rbf
+*.pof
+*.jic
+*.rpt
+*.summary
+*.smsg
+*.qmsg
+*.done
+*.jdi
+*.pin
+*.sld
+*.qws
+*.qdf

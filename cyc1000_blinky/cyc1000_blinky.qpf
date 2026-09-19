@@ -1,0 +1,2 @@
+QUARTUS_VERSION = "25.1std"
+PROJECT_REVISION = "cyc1000_blinky"
