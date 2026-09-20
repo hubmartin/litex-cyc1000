@@ -7,7 +7,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 from migen import *
-from migen.genlib.cdc import MultiReg
 
 from litex.gen import *
 
@@ -18,7 +17,6 @@ from litex.soc.integration.soc import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.led import LedChaser
 from litex.soc.cores.gpio import GPIOIn
-from litex.soc.interconnect.csr import CSRStatus
 from litex.build.generic_platform import IOStandard, Pins, Subsignal
 
 from liteeth.phy.rmii import LiteEthPHYRMII
@@ -53,13 +51,17 @@ class _CRG(LiteXModule):
 
 class BaseSoC(SoCCore):
     def __init__(self, sys_clk_freq=50e6, with_led_chaser=True, with_buttons=False,
-        with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.50", eth_dynamic_ip=False, **kwargs):
+        with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.241",
+        eth_dynamic_ip=False, **kwargs):
         platform = trenz_cyc1000.Platform()
         # F16 is PMOD PIO_03 and also the optional nCEO configuration pin.
         # CYC1000 does not use nCEO for its single-FPGA configuration chain.
         platform.toolchain.additional_qsf_commands.append(
             'set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "Use as regular IO"')
-
+        # Keep an unplugged UART RX at the idle level so the BIOS console does
+        # not consume spurious characters while servicing the network stack.
+        platform.toolchain.additional_qsf_commands.append(
+            'set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to serial_rx')
         # Waveshare LAN8720 ETH Board, connected to CYC1000's J6 PMOD.
         # The LAN8720's nINT/REFCLKO pin is configured by the board as the 50 MHz
         # RMII reference-clock output. TXD1 is wired separately to FPGA pin N2.
@@ -101,10 +103,10 @@ class BaseSoC(SoCCore):
                 refclk_cd  = None,
             )
             if with_etherbone:
-                # Hardware ARP/IP/ICMP/UDP core. ICMP echo replies work without CPU software.
                 self.add_etherbone(
                     phy          = self.ethphy,
                     ip_address   = eth_ip,
+                    data_width   = 8,
                     buffer_depth = 4,
                 )
             if with_ethernet:
@@ -112,36 +114,16 @@ class BaseSoC(SoCCore):
                     phy        = self.ethphy,
                     dynamic_ip = eth_dynamic_ip,
                     local_ip   = None if eth_dynamic_ip else eth_ip,
-                    nrxslots   = 1,
+                    # Keep two RX slots. LiteEth's single-slot Wishbone decoder
+                    # requires its slot-select address bit to be zero; with one
+                    # RX slot the adjacent TX window starts at +0x800, where
+                    # that bit is one, so the TX SRAM never acknowledges writes.
+                    # Two RX slots align the TX window at +0x1000.
+                    nrxslots   = 2,
                     ntxslots   = 1,
                 )
-
-            if with_etherbone:
-                # Count the PHY-provided 50 MHz RMII reference clock for hardware diagnosis.
-                eth_refclk_cycles = Signal(32)
-                eth_rx_bytes = Signal(32)
-                eth_tx_bytes = Signal(32)
-                eth_crs_cycles = Signal(32)
-                eth_rx_pin_cycles = Signal(32)
-                self.eth_refclk_cycles = CSRStatus(32, description="RMII REFCLKO cycles sampled from eth_rx domain.")
-                self.eth_rx_bytes = CSRStatus(32, description="RMII received byte count.")
-                self.eth_tx_bytes = CSRStatus(32, description="RMII transmitted byte count.")
-                self.eth_crs_cycles = CSRStatus(32, description="Raw CRS_DV high cycles.")
-                self.eth_rx_pin_cycles = CSRStatus(32, description="Raw RXD nonzero cycles.")
-                self.sync.eth_rx += [
-                    eth_refclk_cycles.eq(eth_refclk_cycles + 1),
-                    If(self.ethphy.rx.source.valid, eth_rx_bytes.eq(eth_rx_bytes + 1)),
-                    If(self.ethphy.tx.sink.valid,   eth_tx_bytes.eq(eth_tx_bytes + 1)),
-                    If(eth_rmii_pads.crs_dv, eth_crs_cycles.eq(eth_crs_cycles + 1)),
-                    If(eth_rmii_pads.rx_data != 0, eth_rx_pin_cycles.eq(eth_rx_pin_cycles + 1)),
-                ]
-                self.specials += [
-                    MultiReg(eth_refclk_cycles, self.eth_refclk_cycles.status, odomain="sys"),
-                    MultiReg(eth_rx_bytes,      self.eth_rx_bytes.status,      odomain="sys"),
-                    MultiReg(eth_tx_bytes,      self.eth_tx_bytes.status,      odomain="sys"),
-                    MultiReg(eth_crs_cycles,    self.eth_crs_cycles.status,    odomain="sys"),
-                    MultiReg(eth_rx_pin_cycles, self.eth_rx_pin_cycles.status, odomain="sys"),
-                ]
+                # Run the BIOS software network stack, but skip automatic TFTP boot.
+                self.add_constant("NET_BOOT_DISABLE")
 
         # Leds
         if with_led_chaser:
@@ -161,15 +143,17 @@ def main():
     parser = LiteXArgumentParser(platform=trenz_cyc1000.Platform, description="LiteX SoC on CYC1000.")
     parser.add_target_argument("--sys-clk-freq",        default=50e6, type=float, help="System clock frequency.")
     parser.add_target_argument("--with-buttons",        action="store_true",      help="Enable Buttons.")
+    parser.add_target_argument("--no-led-chaser",       action="store_true",      help="Disable LED chaser.")
     ethopts = parser.target_group.add_mutually_exclusive_group()
     ethopts.add_argument("--with-ethernet",  action="store_true", help="Enable CPU-accessible LAN8720 Ethernet MAC.")
-    ethopts.add_argument("--with-etherbone", action="store_true", help="Enable LiteEth Etherbone, ICMP ping and UDP access.")
-    parser.add_target_argument("--eth-ip",              default="192.168.1.50",   help="Static IPv4 address.")
+    ethopts.add_argument("--with-etherbone", action="store_true", help="Enable LiteEth Etherbone.")
+    parser.add_target_argument("--eth-ip",              default="192.168.1.241", help="Static IPv4 address.")
     parser.add_target_argument("--eth-dynamic-ip",      action="store_true",      help="Use DHCP instead of static IPv4.")
     args = parser.parse_args()
 
     soc = BaseSoC(
         sys_clk_freq  = args.sys_clk_freq,
+        with_led_chaser = not args.no_led_chaser,
         with_buttons  = args.with_buttons,
         with_ethernet  = args.with_ethernet,
         with_etherbone = args.with_etherbone,

@@ -1,34 +1,94 @@
-# CYC1000 + Waveshare LAN8720: uzavřený záznam oživování
+# CYC1000 + LAN8720: uzavřený záznam oživování
 
 Aktualizováno: 2026-09-20
 
-Stav: **vyřešeno — 100BASE-TX full duplex, ping i Etherbone fungují**
+Stav: **vyřešeno — aplikační LiteEth MAC na `192.168.1.241` stabilně odpovídá na ping**
 
-## Cíl
+Dokument zůstává v repozitáři jako záznam skutečné příčiny a ověřeného řešení;
+nejde už o otevřený problém.
 
-LiteX/LiteEth RMII Ethernet na Trenz CYC1000 s Waveshare **LAN8720 ETH Board**. Aktuální bitstream se nahrává pouze do FPGA SRAM pomocí `./load.sh`.
+## Konečná konfigurace
 
-## Aktuální projekt a build
+- LiteEth `--with-ethernet`, bez Etherbone;
+- VexRiscv `minimal`, 8 KiB interní main RAM;
+- 2 RX sloty, 1 TX slot;
+- RX SRAM `0x80000000`, velikost 4096 B;
+- TX SRAM `0x80001000`, velikost 2048 B;
+- statická IPv4 adresa `192.168.1.241`;
+- `NET_BOOT_DISABLE`, tedy bez automatického TFTP bootu;
+- UART 115200 Bd a lokální JTAGBone pro diagnostiku;
+- LED chaser vypnutý kvůli zaplnění FPGA.
 
-Adresář projektu: `/home/martin/dev/ai/Cyclone10LP/litex_cyc1000`
+## Ověřený výsledek
 
-```sh
-./build.sh
-./load.sh
-./console.sh
+- UniFi: FE, full duplex (100BASE-TX full duplex).
+- Saleae: aktivní `CRS_DV/RXD[1:0]` i `TX_EN/TXD[1:0]`.
+- ARP request pro `192.168.1.241` byl v RX SRAM přijat bez CRC chyby.
+- 20/20 počátečních pingů, průměrné RTT `0,404 ms`.
+- 300/300 běžných pingů, průměrné RTT `0,390 ms`.
+- 100/100 pingů s payloadem 1472 B, průměrné RTT `2,232 ms`.
+
+Pět souběžných rychlých ping streamů způsobilo ztrátu 0–3,5 %. Jediný stream
+při normální frekvenci neměl ztráty; limitem je jednoduchý polling BIOS stack,
+nikoli fyzická linka.
+
+## Skutečná příčina poslední TX závady
+
+Při konfiguraci `nrxslots=1, ntxslots=1` vytvořil LiteX tuto mapu:
+
+```text
+RX  0x80000000
+TX  0x80000800
 ```
 
-`build.sh` vytváří LiteEth Etherbone konfiguraci:
+LiteEth používá i pro jediný slot jeden adresní dekódovací bit. TX Wishbone
+slave vyžadoval bit 9 word adresy nulový, ale základna `0x80000800` jej měla
+jedničkový. Výsledek:
 
-- hardwarový ARP/IP/ICMP echo responder na `192.168.1.50`;
-- Etherbone UDP port `1234`;
-- LiteX UART na `/dev/ttyUSB1`, 115200 Bd;
-- SDRAM zůstává aktivní;
-- CPU je `VexRiscv lite`, SDRAM L2 cache je vypnutá kvůli kapacitě M9K.
+- platné ARP rámce se přijímaly a firmware je zpracoval;
+- firmware nastavil délku TX rámce a spustil reader;
+- zápis do TX SRAM nikdy nedostal Wishbone ACK;
+- na Saleae se objevovaly TX pulzy, ale host nedostal platnou odpověď;
+- rostl čítač bus errors a ping končil ztrátou.
 
-Hostitelský počítač: `enp4s0 = 192.168.1.216/24`.
+Řešením je `nrxslots=2, ntxslots=1`. Dva RX sloty posunou TX na zarovnanou
+adresu `0x80001000`, pro kterou dekodér ACK generuje. Po této změně ping začal
+okamžitě fungovat.
 
-## Zapojení použité v gateware
+## Pozor na JTAGBone diagnostiku
+
+`litex_server --jtag` používá jediný sériový JTAG transport. Několik současných
+nebo rychle po sobě spuštěných klientů může uvnitř serveru závodit. Standardní
+`litex_client` navíc při read timeoutu bez `--strict-timeout` vrací nuly. První
+domněnka, že TX SRAM obsahuje samé nuly, proto byla falešná; šlo o timeout bez
+ACK na chybně dekódované adrese.
+
+Pro spolehlivou diagnostiku:
+
+```sh
+../.venv/bin/python -m litex.tools.litex_server \
+  --jtag --jtag-config openocd_cyc1000.cfg --jtag-chain 1 --bind-port 1235
+
+../.venv/bin/python -m litex.tools.litex_client \
+  --host localhost --port 1235 --csr-csv build/csr.csv \
+  --strict-timeout --ident
+```
+
+Používat jen jeden klient najednou. JTAGBone je Wishbone přístup přes USB/JTAG,
+nikoli shell a nikoli služba dostupná z Ethernetu.
+
+## Dříve vyřešená fyzická část
+
+Před opravou TX mapy bylo ověřeno:
+
+- LAN8720 na MDIO adrese 1, `mdio_read 1 2` vrací `0x0007`;
+- `nINT/REFCLKO` dodává do FPGA 50 MHz;
+- `F16` je v Quartusu uvolněn z funkce `nCEO` pro `CRS_DV`;
+- po novém flashnutí a reconnectu RJ45 začaly růst RX čítače;
+- vynucení `mdio_write 1 0 0x0000` je nevhodné, protože nastaví 10 Mb/s half
+  duplex; správně se používá autonegociace.
+
+## Zapojení
 
 | LAN8720 | CYC1000 | FPGA pin | LiteEth |
 |---|---|---|---|
@@ -42,102 +102,14 @@ Hostitelský počítač: `enp4s0 = 192.168.1.216/24`.
 | MDIO | PIO_08 | C16 | `mdio` |
 | TXD1 | samostatný vodič | N2 | `tx_data[1]` |
 
-Modul je fyzicky otočený o 180°, aby se napájení a zem potkaly s PMODem.
-
-`F16` je také volitelný konfigurační pin `nCEO`. `soc.py` proto nastavuje Quartus volbu:
-
-```tcl
-set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "Use as regular IO"
-```
-
-## Konečný ověřený stav
-
-- UniFi switch hlásí `FE`, full duplex, tedy 100BASE-TX full duplex.
-- RXD0, RXD1 a CRS_DV jsou aktivní a FPGA přijímá platné rámce.
-- TX_EN, TXD0 a TXD1 vysílají odpovědi.
-- Test `ping -I enp4s0 -c 100 192.168.1.50` skončil 100/100, 0 % packet loss.
-- RTT min/avg/max/mdev bylo `0.126/0.170/0.286/0.025 ms`.
-- Etherbone na UDP portu 1234 přečetl identifikátor SoC i diagnostická CSR.
-- UART není pro hardwarový ARP/IP/ICMP/UDP/Etherbone datový směr potřeba.
-
-Ověřený Etherbone identifikátor:
+## Utilizace finálního bitstreamu
 
 ```text
-LiteX SoC on CYC1000 2026-09-19 23:46:52
+Logic elements:     23 625 / 24 624  (96 %)
+LABs:                1 534 / 1 539   (100 %, 5 volných)
+Registers:          18 386 / 25 304  (73 %)
+Block memory bits: 456 544 / 608 256 (75 %)
 ```
 
-Příklad vzdáleně přečtených čítačů:
-
-```text
-0xf0002800 : 0x28b9e625 main_eth_refclk_cycles
-0xf0002804 : 0x000f15e5 main_eth_rx_bytes
-0xf0002808 : 0x0001c0f0 main_eth_tx_bytes
-0xf000280c : 0x003d6634 main_eth_crs_cycles
-0xf0002810 : 0x001ea1f0 main_eth_rx_pin_cycles
-```
-
-## MDIO a PHY
-
-- LAN8720 je na MDIO adrese **1**.
-- `mdio_read 1 2` vrací `0x0007`: MDIO/MDC komunikace funguje.
-- Po fyzickém odpojení a opětovném zapojení RJ45 proběhla autonegociace správně.
-- Starý diagnostický příkaz `mdio_write 1 0 0x0000` se již nemá používat: vynutil by 10 Mb/s half duplex a zrušil funkční autonegociaci.
-
-### REFCLKO
-
-- `nINT/REFCLKO` na `PIO_07/B16` je v gateware vyveden jako RMII 50MHz clock.
-- Osciloskop potvrzuje 50 MHz.
-- Diagnostické CSR čítadlo ve FPGA také potvrdilo běžící clock.
-
-## Původní symptom a jeho uzavření
-
-Po vynucení 10 Mb/s half duplex bylo z hostitele posláno 10 pingů na `192.168.1.50`.
-
-- Ping: 100% packet loss, ARP soused zůstává `INCOMPLETE`.
-- Čítač LiteEth RX bajtů: `0`.
-- Čítač LiteEth TX bajtů: `0`.
-- Hrubý čítač přímo na `CRS_DV/F16`: nenulový (`0x00028231`), tedy PHY oznamuje příchod rámců.
-- Hrubý čítač přímo na `RXD[1:0]`: `0` — FPGA během testu nikdy nevidělo nenulový dvoubitový symbol.
-
-Tehdejší měření lokalizovalo problém do RX datové cesty. Kontrolované spoje byly:
-
-```text
-LAN8720 P2.9  RXD1  → CYC1000 PIO_02 / F15
-LAN8720 P2.10 RXD0  → CYC1000 PIO_06 / C15
-```
-
-Po novém flashnutí a reconnectu RJ45 začal čítač `RXD[1:0] != 0` růst:
-
-```text
-0x00079efa
-0x0007a0d2
-0x0007a6f6
-```
-
-Saleae současně ukázal přijatý rámec na `CRS_DV/RXD[1:0]` a následnou odpověď na `TX_EN/TXD[1:0]`. Odpověď na ping a funkční Etherbone definitivně potvrzují celou obousměrnou cestu.
-
-## Diagnostická CSR
-
-| Adresa | Význam |
-|---|---|
-| `0xf0002800` | čítač REFCLKO |
-| `0xf0002804` | LiteEth RX bajty |
-| `0xf0002808` | LiteEth TX bajty |
-| `0xf000280c` | cykly s `CRS_DV=1` |
-| `0xf0002810` | cykly s `RXD[1:0] != 0` |
-
-Přímé čtení z UART BIOSu:
-
-```text
-litex> mem_read 0xf0002804 4
-litex> mem_read 0xf0002810 4
-```
-
-Přes Etherbone z hostitele:
-
-```sh
-../.venv/bin/python -m litex.tools.litex_server --udp --udp-ip 192.168.1.50
-../.venv/bin/python -m litex.tools.litex_client --csr-csv build/csr.csv --regs --filter main_eth
-```
-
-`litex_server` musí běžet v samostatném terminálu. Etherbone zpřístupňuje Wishbone CSR a paměť, neposkytuje BIOS shell. Nemá autentizaci ani šifrování, proto patří pouze do důvěryhodné sítě.
+Časování 50MHz `sys_clk` i 50MHz RMII clocku vyhovuje. Quartus nadále hlásí
+záporný setup slack na vstupní `clk12`; nejde o datovou RMII cestu.

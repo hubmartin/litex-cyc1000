@@ -1,15 +1,33 @@
 # LiteX on Trenz CYC1000
 
-Upstream LiteX target `trenz_cyc1000` with a VexRiscv CPU at 50 MHz, LiteX BIOS, 115200 Bd UART, W9864G6JT SDR SDRAM, eight LEDs, and the user button.
-The LED chaser output is PWM-limited to 10/1024 = 0.98% duty cycle. Its `leds_pwm_width` and `leds_pwm_period` CSRs allow later adjustment.
+LiteX SoC for the Trenz CYC1000 (Cyclone 10 LP) with a 50 MHz VexRiscv CPU,
+LiteX BIOS and a Waveshare LAN8720 RMII Ethernet module.
 
-## Ethernet: Waveshare LAN8720 ETH Board
+## Current default build
 
-`build.sh` builds the SDRAM-enabled SoC with LiteEth's hardware ARP/IP/ICMP/UDP Etherbone core and the LAN8720 RMII PHY. It responds to ICMP echo requests at `192.168.1.50` and exposes Etherbone on UDP port 1234. The complete network path has been verified at 100BASE-TX full duplex with 100/100 successful pings and working remote CSR reads. To fit the 10CL025, the build uses no SDRAM L2 cache and the VexRiscv `lite` CPU variant.
+`build.sh` creates the verified application-Ethernet variant:
 
-The default Etherbone data path is implemented in FPGA gateware and does not depend on the VexRiscv firmware. The alternate `--with-ethernet` target instead provides a CPU-accessible packet MAC for the LiteX BIOS software network stack (ARP/IPv4/ICMP/UDP, DHCP and TFTP netboot). It is mutually exclusive with `--with-etherbone` in this target. Neither configuration provides TCP, HTTP, SSH or a network BIOS shell.
+- static address `192.168.1.241`;
+- CPU-driven LiteEth MAC and BIOS network stack;
+- ARP and ICMP echo replies (ping);
+- 2 RX slots and 1 TX slot;
+- VexRiscv `minimal` and 8 KiB integrated main RAM;
+- UART at 115200 Bd and JTAGBone for local Wishbone diagnostics;
+- TFTP netboot and the LED chaser disabled.
 
-The module is rotated by 180 degrees on J6 so its power pins align with the PMOD's 3.3 V and GND pins. This orientation has been checked against the Waveshare P2 schematic and CYC1000 J6 pinout. `nINT` is the LAN8720's multiplexed `nINT/REFCLKO` output and is the required 50 MHz RMII reference clock, not an interrupt in this configuration.
+This bitstream does **not** contain Etherbone, TCP, HTTP, SSH or an Ethernet
+shell. JTAGBone provides CSR/memory access through the USB/JTAG cable, not over
+Ethernet. LiteEth's software UDP support is linked into the BIOS and can be
+used by a future application; no general UDP service is currently listening.
+
+The target still accepts `--with-etherbone` for a separate hardware Etherbone
+build, but `--with-ethernet` and `--with-etherbone` are deliberately mutually
+exclusive.
+
+## Ethernet wiring
+
+The LAN8720 module is rotated by 180 degrees on J6 so its power pins align with
+the PMOD 3.3 V and GND pins. TXD1 uses a separate connection to FPGA pin N2.
 
 | CYC1000 J6 / FPGA pin | LAN8720 signal | LiteEth RMII signal |
 | --- | --- | --- |
@@ -23,58 +41,83 @@ The module is rotated by 180 degrees on J6 so its power pins align with the PMOD
 | PIO_08 / C16 | MDIO | `mdio` |
 | separate FPGA pin N2 | TXD1 | `tx_data[1]` |
 
-MDC and MDIO make the PHY management registers available through LiteX CSRs. The RMII data path needs the seven data/clock signals; MDIO is the two additional wires. Supply the module only from the PMOD's 3.3 V pins and keep the 50 MHz clock wire short.
+`PIO_03/F16` is also the optional Cyclone 10 LP `nCEO` pin. The build reserves
+it as regular user I/O after configuration so it can carry `CRS_DV`.
 
-`PIO_03/F16` is also Cyclone 10 LP's optional `nCEO` configuration output. The build deliberately sets Quartus `CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION` to `Use as regular IO`, so it is available as `CRS_DV` after configuration. Intel documents that `nCEO` can be used as user I/O in a single-device chain.
+## Build, load and flash
 
-After `./load.sh`, use the UART console to verify the PHY without changing its configuration:
+```sh
+./build.sh       # build gateware and BIOS
+./load.sh        # load SRAM; lost after power-off
+./flash.sh       # explicitly program configuration flash
+./console.sh     # /dev/ttyUSB1, 115200 Bd
+```
+
+After loading or flashing, physically reconnect RJ45 so the separately powered
+LAN8720 restarts/autonegotiates against the reset RMII MAC. The verified link is
+100BASE-TX full duplex.
+
+Test the application stack from a host on the same subnet:
+
+```sh
+ping -c 100 192.168.1.241
+ping -c 100 -s 1472 192.168.1.241
+```
+
+The final build passed 300/300 ordinary pings and 100/100 full-MTU pings. Five
+simultaneous high-rate ping streams can overrun the small polling BIOS stack;
+this is a software throughput limit rather than an RMII link error.
+
+## JTAGBone diagnostics
+
+Start the local bridge using the included OpenOCD configuration:
+
+```sh
+../.venv/bin/python -m litex.tools.litex_server \
+  --jtag --jtag-config openocd_cyc1000.cfg --jtag-chain 1 --bind-port 1235
+```
+
+Then connect one client at a time:
+
+```sh
+../.venv/bin/python -m litex.tools.litex_client \
+  --host localhost --port 1235 --csr-csv build/csr.csv --ident
+```
+
+The JTAG backend is a single serial transport. Concurrent clients can race and
+timeout; use `--strict-timeout` when a diagnostic must not silently substitute
+zeroes for a timed-out read.
+
+## Important TX-slot alignment
+
+Keep `nrxslots=2` with the current LiteEth version. With `1 RX + 1 TX`, LiteX
+places TX at `0x80000800`, but LiteEth's single-slot Wishbone decoder rejects
+that address because its slot-select bit is one. The transaction never receives
+an ACK and the BIOS cannot fill its TX buffer. Two RX slots align TX at
+`0x80001000`, which is acknowledged correctly.
+
+Current memory map:
 
 ```text
-litex> mdio_read 1 2
-MDIO read @0x1:
-0x02 0x0007
-litex> mdio_dump 1 32
+ethmac_rx  0x80000000  4096 bytes
+ethmac_tx  0x80001000  2048 bytes
 ```
 
-The LAN8720 is strapped to MDIO PHY address 1. Register 2 returning `0x0007` confirms that MDC, MDIO, module power, and the PHY are communicating.
+## FPGA utilization
 
-With the default Etherbone build and a valid link, test the complete hardware network path from a host on the same subnet:
+Quartus 25.1 Standard, final application-Ethernet build:
 
-```sh
-ping -I enp4s0 -c 100 192.168.1.50
-```
+| Resource | Used | Available | Utilization |
+| --- | ---: | ---: | ---: |
+| Logic elements | 23,625 | 24,624 | 96% |
+| LABs | 1,534 | 1,539 | 100% (5 free) |
+| Registers | 18,386 | 25,304 | 73% |
+| Block-memory bits | 456,544 | 608,256 | 75% |
 
-The ping verifies ARP, IP, ICMP and both directions of the RMII data path. Do not force 10 Mb/s half duplex when normal autonegotiation reports 100 Mb/s full duplex.
+The resolved bring-up history and measurements are in
+[`ETH_TROUBLESHOOTING.md`](ETH_TROUBLESHOOTING.md).
 
-To access the SoC Wishbone bus over Etherbone, run the bridge in one terminal:
+## Minimal non-Ethernet diagnostic variant
 
-```sh
-../.venv/bin/python -m litex.tools.litex_server --udp --udp-ip 192.168.1.50
-```
-
-Then use a second terminal for remote CSR and memory access:
-
-```sh
-../.venv/bin/python -m litex.tools.litex_client --csr-csv build/csr.csv --ident
-../.venv/bin/python -m litex.tools.litex_client --csr-csv build/csr.csv --regs --filter main_eth
-```
-
-Etherbone is an unauthenticated Wishbone-over-UDP bridge, not a remote shell. Only expose it on a trusted network.
-
-The resolved bring-up history, measured results and diagnostic CSR addresses are recorded in [`ETH_TROUBLESHOOTING.md`](ETH_TROUBLESHOOTING.md).
-
-## Build and load
-
-```sh
-./build.sh
-./load.sh
-./console.sh
-```
-
-`load.sh` writes the full SDRAM-enabled SoC to FPGA SRAM only. A power cycle restores the bitstream stored in configuration flash. `flash.sh` programs flash explicitly.
-
-The board UART is `/dev/ttyUSB1`. `console.sh` starts a serial console at 115200 Bd. At the `litex>` prompt, use `help`, `ident`, `buttons`, `leds`, and `sdram_test`.
-
-## Minimal diagnostic variant
-
-`build_minimal.sh` builds a CPU/UART-only image with 8 KiB internal main RAM; `load_minimal.sh` loads it into SRAM. It is useful if external SDRAM is being diagnosed.
+`build_minimal.sh` builds a CPU/UART-only image and `load_minimal.sh` loads it
+into SRAM. It remains useful for diagnostics independent of Ethernet.
