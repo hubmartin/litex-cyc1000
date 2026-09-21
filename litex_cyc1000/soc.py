@@ -6,6 +6,8 @@
 # Copyright (c) 2021 Jakub Cabal <jakubcabal@gmail.com>
 # SPDX-License-Identifier: BSD-2-Clause
 
+import os
+
 from migen import *
 
 from litex.gen import *
@@ -26,10 +28,11 @@ from litedram.phy import GENSDRPHY
 
 # CRG ----------------------------------------------------------------------------------------------
 
+
 class _CRG(LiteXModule):
     def __init__(self, platform, sys_clk_freq):
-        self.rst       = Signal()
-        self.cd_sys    = ClockDomain()
+        self.rst = Signal()
+        self.cd_sys = ClockDomain()
         self.cd_sys_ps = ClockDomain()
 
         # # #
@@ -41,7 +44,7 @@ class _CRG(LiteXModule):
         self.pll = pll = Cyclone10LPPLL(speedgrade="-C8")
         self.comb += pll.reset.eq(self.rst)
         pll.register_clkin(clk12, 12e6)
-        pll.create_clkout(self.cd_sys,    sys_clk_freq)
+        pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
 
         # SDRAM clock
@@ -49,10 +52,11 @@ class _CRG(LiteXModule):
 
 # BaseSoC ------------------------------------------------------------------------------------------
 
+
 class BaseSoC(SoCCore):
     def __init__(self, sys_clk_freq=50e6, with_led_chaser=True, with_buttons=False,
-        with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.241",
-        eth_dynamic_ip=False, **kwargs):
+                 with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.241",
+                 eth_dynamic_ip=False, **kwargs):
         platform = trenz_cyc1000.Platform()
         # F16 is PMOD PIO_03 and also the optional nCEO configuration pin.
         # CYC1000 does not use nCEO for its single-FPGA configuration chain.
@@ -67,15 +71,15 @@ class BaseSoC(SoCCore):
         # RMII reference-clock output. TXD1 is wired separately to FPGA pin N2.
         platform.add_extension([
             ("eth_rmii_clocks", 0,
-                Subsignal("ref_clk", Pins("B16")), # J6 PIO_07: nINT/REFCLKO.
+                Subsignal("ref_clk", Pins("B16")),  # J6 PIO_07: nINT/REFCLKO.
                 IOStandard("3.3-V LVTTL")),
             ("eth_rmii", 0,
-                Subsignal("tx_data", Pins("F13 N2")), # TXD0, TXD1.
-                Subsignal("rx_data", Pins("C15 F15")), # RXD0, RXD1.
-                Subsignal("crs_dv",  Pins("F16")),     # CRS_DV.
-                Subsignal("tx_en",   Pins("D15")),     # TX_EN.
-                Subsignal("mdc",     Pins("D16")),     # MDC.
-                Subsignal("mdio",    Pins("C16")),     # MDIO.
+                Subsignal("tx_data", Pins("F13 N2")),  # TXD0, TXD1.
+                Subsignal("rx_data", Pins("C15 F15")),  # RXD0, RXD1.
+                Subsignal("crs_dv", Pins("F16")),     # CRS_DV.
+                Subsignal("tx_en", Pins("D15")),     # TX_EN.
+                Subsignal("mdc", Pins("D16")),     # MDC.
+                Subsignal("mdio", Pins("C16")),     # MDIO.
                 IOStandard("3.3-V LVTTL")),
         ])
 
@@ -89,38 +93,38 @@ class BaseSoC(SoCCore):
         if not self.integrated_main_ram_size:
             self.sdrphy = GENSDRPHY(platform.request("sdram"), sys_clk_freq)
             self.add_sdram("sdram",
-                phy           = self.sdrphy,
-                module        = W9864G6JT(sys_clk_freq, "1:1"),
-                l2_cache_size = kwargs.get("l2_size", 8192)
-            )
+                           phy=self.sdrphy,
+                           module=W9864G6JT(sys_clk_freq, "1:1"),
+                           l2_cache_size=kwargs.get("l2_size", 8192)
+                           )
 
         # Ethernet / RMII --------------------------------------------------------------------------
         if with_ethernet or with_etherbone:
             eth_rmii_pads = platform.request("eth_rmii")
             self.ethphy = LiteEthPHYRMII(
-                clock_pads = platform.request("eth_rmii_clocks"),
-                pads       = eth_rmii_pads,
-                refclk_cd  = None,
+                clock_pads=platform.request("eth_rmii_clocks"),
+                pads=eth_rmii_pads,
+                refclk_cd=None,
             )
             if with_etherbone:
                 self.add_etherbone(
-                    phy          = self.ethphy,
-                    ip_address   = eth_ip,
-                    data_width   = 8,
-                    buffer_depth = 4,
+                    phy=self.ethphy,
+                    ip_address=eth_ip,
+                    data_width=8,
+                    buffer_depth=4,
                 )
             if with_ethernet:
                 self.add_ethernet(
-                    phy        = self.ethphy,
-                    dynamic_ip = eth_dynamic_ip,
-                    local_ip   = None if eth_dynamic_ip else eth_ip,
+                    phy=self.ethphy,
+                    dynamic_ip=eth_dynamic_ip,
+                    local_ip=None if eth_dynamic_ip else eth_ip,
                     # Keep two RX slots. LiteEth's single-slot Wishbone decoder
                     # requires its slot-select address bit to be zero; with one
                     # RX slot the adjacent TX window starts at +0x800, where
                     # that bit is one, so the TX SRAM never acknowledges writes.
                     # Two RX slots align the TX window at +0x1000.
-                    nrxslots   = 2,
-                    ntxslots   = 1,
+                    nrxslots=2,
+                    ntxslots=1,
                 )
                 # Run the BIOS software network stack, but skip automatic TFTP boot.
                 self.add_constant("NET_BOOT_DISABLE")
@@ -128,8 +132,8 @@ class BaseSoC(SoCCore):
         # Leds
         if with_led_chaser:
             self.leds = LedChaser(
-                pads         = platform.request_all("user_led"),
-                sys_clk_freq = sys_clk_freq)
+                pads=platform.request_all("user_led"),
+                sys_clk_freq=sys_clk_freq)
             self.leds.add_pwm(default_width=10, default_period=1024, with_csr=True)
 
         # Buttons ----------------------------------------------------------------------------------
@@ -138,36 +142,44 @@ class BaseSoC(SoCCore):
 
 # Build --------------------------------------------------------------------------------------------
 
+
 def main():
     from litex.build.parser import LiteXArgumentParser
     parser = LiteXArgumentParser(platform=trenz_cyc1000.Platform, description="LiteX SoC on CYC1000.")
-    parser.add_target_argument("--sys-clk-freq",        default=50e6, type=float, help="System clock frequency.")
-    parser.add_target_argument("--with-buttons",        action="store_true",      help="Enable Buttons.")
-    parser.add_target_argument("--no-led-chaser",       action="store_true",      help="Disable LED chaser.")
+    parser.add_target_argument("--sys-clk-freq", default=50e6, type=float, help="System clock frequency.")
+    parser.add_target_argument("--with-buttons", action="store_true", help="Enable Buttons.")
+    parser.add_target_argument("--no-led-chaser", action="store_true", help="Disable LED chaser.")
     ethopts = parser.target_group.add_mutually_exclusive_group()
-    ethopts.add_argument("--with-ethernet",  action="store_true", help="Enable CPU-accessible LAN8720 Ethernet MAC.")
+    ethopts.add_argument("--with-ethernet", action="store_true", help="Enable CPU-accessible LAN8720 Ethernet MAC.")
     ethopts.add_argument("--with-etherbone", action="store_true", help="Enable LiteEth Etherbone.")
-    parser.add_target_argument("--eth-ip",              default="192.168.1.241", help="Static IPv4 address.")
-    parser.add_target_argument("--eth-dynamic-ip",      action="store_true",      help="Use DHCP instead of static IPv4.")
+    parser.add_target_argument("--eth-ip", default="192.168.1.241", help="Static IPv4 address.")
+    parser.add_target_argument("--eth-dynamic-ip", action="store_true", help="Use DHCP instead of static IPv4.")
     args = parser.parse_args()
 
     soc = BaseSoC(
-        sys_clk_freq  = args.sys_clk_freq,
-        with_led_chaser = not args.no_led_chaser,
-        with_buttons  = args.with_buttons,
-        with_ethernet  = args.with_ethernet,
-        with_etherbone = args.with_etherbone,
-        eth_ip        = args.eth_ip,
-        eth_dynamic_ip = args.eth_dynamic_ip,
+        sys_clk_freq=args.sys_clk_freq,
+        with_led_chaser=not args.no_led_chaser,
+        with_buttons=args.with_buttons,
+        with_ethernet=args.with_ethernet,
+        with_etherbone=args.with_etherbone,
+        eth_ip=args.eth_ip,
+        eth_dynamic_ip=args.eth_dynamic_ip,
         **parser.soc_argdict
     )
     builder = Builder(soc, **parser.builder_argdict)
+
+    # Add firmware package (TCP + HTTP server)
+    firmware_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
+    builder.add_software_package("libfirmware", firmware_dir)
+    builder.add_software_library("libfirmware", always_link=True)
+
     if args.build:
         builder.build(**parser.toolchain_argdict)
 
     if args.load:
         prog = soc.platform.create_programmer()
         prog.load_bitstream(builder.get_bitstream_filename(mode="sram"))
+
 
 if __name__ == "__main__":
     main()

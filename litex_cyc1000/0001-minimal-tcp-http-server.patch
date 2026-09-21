@@ -1,0 +1,340 @@
+--- a/litex/soc/software/libliteeth/udp.c	2026-09-19 18:06:29.729723258 +0200
++++ b/a/litex/soc/software/libliteeth/udp.c	2026-09-20 23:45:33.183356638 +0200
+@@ -37,16 +37,7 @@
+ #define ETH_TX_CRC_SIZE 0
+ #endif
+ 
+-struct ethernet_header {
+-#ifndef HW_PREAMBLE_CRC
+-	uint8_t preamble[8];
+-#endif
+-	uint8_t destmac[6];
+-	uint8_t srcmac[6];
+-	uint16_t ethertype;
+-} __attribute__((packed));
+-
+-static void fill_eth_header(struct ethernet_header *h, const uint8_t *destmac, const uint8_t *srcmac, uint16_t ethertype)
++void eth_fill_header(struct ethernet_header *h, const uint8_t *destmac, const uint8_t *srcmac, uint16_t ethertype)
+ {
+ 	int i;
+ 
+@@ -89,22 +80,10 @@
+ #define IP_IPV4			0x45
+ #define IP_DONT_FRAGMENT	0x4000
+ #define IP_TTL			64
++#define IP_PROTO_TCP		0x06
+ #define IP_PROTO_UDP		0x11
+ #define IP_PROTO_ICMP		0x01
+ 
+-struct ip_header {
+-	uint8_t version;
+-	uint8_t diff_services;
+-	uint16_t total_length;
+-	uint16_t identification;
+-	uint16_t fragment_offset;
+-	uint8_t ttl;
+-	uint8_t proto;
+-	uint16_t checksum;
+-	uint32_t src_ip;
+-	uint32_t dst_ip;
+-} __attribute__((packed));
+-
+ struct udp_header {
+ 	uint16_t src_port;
+ 	uint16_t dst_port;
+@@ -141,6 +120,7 @@
+ 		struct arp_frame arp;
+ 		struct udp_frame udp;
+ 		struct icmp_frame icmp;
++		struct tcp_frame tcp;
+ 	} contents;
+ } __attribute__((packed));
+ 
+@@ -157,7 +137,7 @@
+ static uint32_t txlen;
+ static ethernet_buffer *txbuffer;
+ 
+-static int send_packet(void)
++int eth_send_packet(void)
+ {
+ 	struct timeout timeout;
+ 	/* wait buffer to be available */
+@@ -257,7 +237,7 @@
+ 		if(ntohl(rx_arp->target_ip) == my_ip) {
+ 			int i;
+ 
+-			fill_eth_header(&txbuffer->frame.eth_header,
++			eth_fill_header(&txbuffer->frame.eth_header,
+ 				rx_arp->sender_mac,
+ 				my_mac,
+ 				ETHERTYPE_ARP);
+@@ -275,7 +255,7 @@
+ 			tx_arp->target_ip = htonl(ntohl(rx_arp->sender_ip));
+ 			for(i=0;i<6;i++)
+ 				tx_arp->target_mac[i] = rx_arp->sender_mac[i];
+-			send_packet();
++			eth_send_packet();
+ 		}
+ 		return;
+ 	}
+@@ -304,7 +284,7 @@
+ 
+ 	for(tries=0;tries<8;tries++) {
+ 		/* Send an ARP request */
+-		fill_eth_header(&txbuffer->frame.eth_header,
++		eth_fill_header(&txbuffer->frame.eth_header,
+ 				broadcast,
+ 				my_mac,
+ 				ETHERTYPE_ARP);
+@@ -324,7 +304,7 @@
+ 		for(i=0;i<6;i++)
+ 			arp->target_mac[i] = 0;
+ 
+-		if (!send_packet()) {
++		if (!eth_send_packet()) {
+ 			arp_pending = 0;
+ 			return 0;
+ 		}
+@@ -345,7 +325,7 @@
+ 	return 0;
+ }
+ 
+-static uint16_t ip_checksum(uint32_t r, void *buffer, uint32_t length, int complete)
++uint16_t eth_ip_checksum(uint32_t r, void *buffer, uint32_t length, int complete)
+ {
+ 	uint8_t *ptr;
+ 	uint32_t i;
+@@ -403,7 +383,7 @@
+ 	txlen = length + sizeof(struct ethernet_header) + sizeof(struct udp_frame);
+ 	if(txlen < ARP_PACKET_LENGTH) txlen = ARP_PACKET_LENGTH;
+ 
+-	fill_eth_header(&txbuffer->frame.eth_header,
++	eth_fill_header(&txbuffer->frame.eth_header,
+ 		cached_mac,
+ 		my_mac,
+ 		ETHERTYPE_IP);
+@@ -418,7 +398,7 @@
+ 	txbuffer->frame.contents.udp.ip.checksum = 0;
+ 	h.src_ip = txbuffer->frame.contents.udp.ip.src_ip = htonl(my_ip);
+ 	h.dst_ip = txbuffer->frame.contents.udp.ip.dst_ip = htonl(cached_ip);
+-	txbuffer->frame.contents.udp.ip.checksum = htons(ip_checksum(0, &txbuffer->frame.contents.udp.ip,
++	txbuffer->frame.contents.udp.ip.checksum = htons(eth_ip_checksum(0, &txbuffer->frame.contents.udp.ip,
+ 		sizeof(struct ip_header), 1));
+ 
+ 	txbuffer->frame.contents.udp.udp.src_port = htons(src_port);
+@@ -427,12 +407,12 @@
+ 	txbuffer->frame.contents.udp.udp.checksum = 0;
+ 
+ 	h.zero = 0;
+-	r = ip_checksum(0, &h, sizeof(struct pseudo_header), 0);
+-	r = ip_checksum(r, &txbuffer->frame.contents.udp.udp,
++	r = eth_ip_checksum(0, &h, sizeof(struct pseudo_header), 0);
++	r = eth_ip_checksum(r, &txbuffer->frame.contents.udp.udp,
+ 		sizeof(struct udp_header)+length, 1);
+ 	txbuffer->frame.contents.udp.udp.checksum = htons(r);
+ 
+-	return send_packet();
++	return eth_send_packet();
+ }
+ 
+ static unsigned ping_seq_number = 0;
+@@ -450,7 +430,7 @@
+ 		return -1;
+ 	}
+ 
+-	fill_eth_header(
++	eth_fill_header(
+ 		&txbuffer->frame.eth_header,
+ 		cached_mac,
+ 		my_mac,
+@@ -469,7 +449,7 @@
+ 	tx_icmp->ip.checksum = 0;
+ 	tx_icmp->ip.src_ip = htonl(my_ip);
+ 	tx_icmp->ip.dst_ip = htonl(ip);
+-	tx_icmp->ip.checksum = htons(ip_checksum(
++	tx_icmp->ip.checksum = htons(eth_ip_checksum(
+ 		0, &tx_icmp->ip, sizeof(struct ip_header), 1
+ 	));
+ 
+@@ -481,7 +461,7 @@
+ 		tx_icmp->payload[i] = i;
+ 
+ 	tx_icmp->icmp.checksum = 0;
+-	unsigned short r = ip_checksum(
++	unsigned short r = eth_ip_checksum(
+ 		0,
+ 		&tx_icmp->icmp,
+ 		payload_length + sizeof(struct icmp_header),
+@@ -490,7 +470,7 @@
+ 	tx_icmp->icmp.checksum = htons(r);
+ 
+ 	txlen = payload_length + sizeof(struct ethernet_header) + sizeof(struct icmp_frame);
+-	if (!send_packet())
++	if (!eth_send_packet())
+ 		return -1;
+ 
+ 	ping_ts_send = 1;
+@@ -527,7 +507,7 @@
+ 	unsigned short length = ip_total_length - sizeof(struct icmp_frame);
+ 
+ 	if(rx_icmp->icmp.type == ICMP_ECHO) {
+-		fill_eth_header(
++		eth_fill_header(
+ 			&txbuffer->frame.eth_header,
+ 			rxbuffer->frame.eth_header.srcmac,
+ 			my_mac,
+@@ -544,7 +524,7 @@
+ 		tx_icmp->ip.checksum = 0;
+ 		tx_icmp->ip.src_ip = htonl(my_ip);
+ 		tx_icmp->ip.dst_ip = rxbuffer->frame.contents.icmp.ip.src_ip;
+-		tx_icmp->ip.checksum = htons(ip_checksum(
++		tx_icmp->ip.checksum = htons(eth_ip_checksum(
+ 			0, &tx_icmp->ip, sizeof(struct ip_header), 1
+ 		));
+ 
+@@ -556,7 +536,7 @@
+ 			tx_icmp->payload[i] = rx_icmp->payload[i];
+ 
+ 		tx_icmp->icmp.checksum = 0;
+-		unsigned short r = ip_checksum(
++		unsigned short r = eth_ip_checksum(
+ 			0,
+ 			&tx_icmp->icmp,
+ 			length + sizeof(struct icmp_header),
+@@ -565,7 +545,7 @@
+ 		tx_icmp->icmp.checksum = htons(r);
+ 
+ 		txlen = length + sizeof(struct ethernet_header) + sizeof(struct icmp_frame);
+-		send_packet();
++		eth_send_packet();
+ 	} else if (rx_icmp->icmp.type == ICMP_ECHO_REPLY) {
+ 		uint8_t *tmp = (uint8_t *)(&rx_icmp->ip.src_ip);
+ 		printf("%d bytes from %d.%d.%d.%d: ", length, tmp[0], tmp[1], tmp[2], tmp[3]);
+@@ -602,6 +582,7 @@
+ #ifdef ETH_UDP_BROADCAST
+ static udp_callback bx_callback;
+ #endif /* ETH_UDP_BROADCAST */
++static tcp_callback tcp_rx_callback;
+ 
+ static void process_udp(void)
+ {
+@@ -656,6 +637,31 @@
+ }
+ #endif /* ETH_UDP_BROADCAST */
+ 
++void tcp_set_callback(tcp_callback callback)
++{
++	tcp_rx_callback = callback;
++}
++
++uint8_t *eth_get_tx_buffer(void)
++{
++	return txbuffer->raw;
++}
++
++void eth_set_tx_len(int len)
++{
++	txlen = len;
++}
++
++uint8_t *eth_get_my_mac(void)
++{
++	return my_mac;
++}
++
++uint32_t eth_get_my_ip(void)
++{
++	return my_ip;
++}
++
+ static void process_frame(void)
+ {
+ 	flush_cpu_dcache();
+@@ -709,6 +715,11 @@
+ 			process_udp();
+ 		else if (hdr->proto == IP_PROTO_ICMP)
+ 			process_icmp();
++		else if (hdr->proto == IP_PROTO_TCP && tcp_rx_callback)
++			tcp_rx_callback(
++				ntohl(hdr->src_ip),
++				&rxbuffer->frame.contents.tcp,
++				rxlen - sizeof(struct ethernet_header));
+ 	}
+ }
+ 
+--- a/litex/soc/software/libliteeth/udp.h	2026-09-19 18:06:29.729749948 +0200
++++ b/a/litex/soc/software/libliteeth/udp.h	2026-09-20 23:45:33.183356638 +0200
+@@ -35,6 +35,73 @@
+ void eth_init(void);
+ void eth_mode(void);
+ 
++/* --- TCP dispatch + low-level helpers exposed for firmware --- */
++
++#include <stdint.h>
++
++#ifndef HW_PREAMBLE_CRC
++struct ethernet_header {
++	uint8_t  preamble[8];
++	uint8_t  destmac[6];
++	uint8_t  srcmac[6];
++	uint16_t ethertype;
++} __attribute__((packed));
++#else
++struct ethernet_header {
++	uint8_t  destmac[6];
++	uint8_t  srcmac[6];
++	uint16_t ethertype;
++} __attribute__((packed));
++#endif
++
++struct ip_header {
++	uint8_t  version;
++	uint8_t  diff_services;
++	uint16_t total_length;
++	uint16_t identification;
++	uint16_t fragment_offset;
++	uint8_t  ttl;
++	uint8_t  proto;
++	uint16_t checksum;
++	uint32_t src_ip;
++	uint32_t dst_ip;
++} __attribute__((packed));
++
++struct tcp_header {
++	uint16_t src_port;
++	uint16_t dst_port;
++	uint32_t seq_num;
++	uint32_t ack_num;
++	uint8_t  data_offset;
++	uint8_t  flags;
++	uint16_t window;
++	uint16_t checksum;
++	uint16_t urgent;
++} __attribute__((packed));
++
++struct tcp_frame {
++	struct ip_header  ip;
++	struct tcp_header tcp;
++	char payload[];
++} __attribute__((packed));
++
++typedef void (*tcp_callback)(uint32_t src_ip, struct tcp_frame *frame,
++                             uint32_t raw_len);
++void tcp_set_callback(tcp_callback callback);
++
++/* TX helpers */
++int          eth_send_packet(void);
++void         eth_fill_header(struct ethernet_header *h,
++                             const uint8_t *destmac,
++                             const uint8_t *srcmac,
++                             uint16_t ethertype);
++uint16_t     eth_ip_checksum(uint32_t r, void *buffer,
++                             uint32_t length, int complete);
++uint8_t     *eth_get_tx_buffer(void);
++void         eth_set_tx_len(int len);
++uint8_t     *eth_get_my_mac(void);
++uint32_t     eth_get_my_ip(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
