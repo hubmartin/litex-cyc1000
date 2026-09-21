@@ -2,8 +2,7 @@
 # Software-only rebuild (skips Quartus gateware compilation ~5 min → ~10 sec)
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
-ROOT=$(cd .. && pwd)
-export PYTHON="$ROOT/.venv/bin/python"
+source ./litex_env.sh
 "$PYTHON" soc.py \
   --build --no-compile-gateware \
   --with-buttons --no-led-chaser --with-ethernet --eth-ip 192.168.1.241 \

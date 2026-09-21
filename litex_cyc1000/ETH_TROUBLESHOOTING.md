@@ -1,6 +1,6 @@
 # CYC1000 + LAN8720: uzavřený záznam oživování
 
-Aktualizováno: 2026-09-20
+Aktualizováno: 2026-09-21
 
 Stav: **vyřešeno — aplikační LiteEth MAC na `192.168.1.241` stabilně odpovídá na ping**
 
@@ -31,6 +31,22 @@ nejde už o otevřený problém.
 Pět souběžných rychlých ping streamů způsobilo ztrátu 0–3,5 %. Jediný stream
 při normální frekvenci neměl ztráty; limitem je jednoduchý polling BIOS stack,
 nikoli fyzická linka.
+
+## Regrese po lokální úpravě `libliteeth`
+
+Pozdější experiment upravil `udp.c` a `udp.h` přímo v ignorované `.venv`.
+Proto jej návrat Git repozitáře na poslední commit neodstranil. Rozšířený
+`udp.h` vybíral strukturu Ethernet hlavičky podle `HW_PREAMBLE_CRC`, ale byl
+načten dříve, než `udp.c` tento symbol odvodil z
+`CSR_ETHMAC_PREAMBLE_CRC_ADDR`. Firmware pak očekával v MAC SRAM osm bajtů
+preambule, kterou hardware správně odstranil.
+
+Projev byl jednoznačný: RX sloty a eventy fungovaly, CRC chyby byly nulové,
+BIOS měl správnou IP, ale ARP pole četl s posunem `+8` a TX SRAM zůstávala
+prázdná. Projekt proto nyní nastavuje `PYTHONPATH` pomocí `litex_env.sh` na
+připnuté submoduly v `third_party/`; pozměněná kopie v `.venv/site-packages`
+se do buildu nepoužije. Opravený build s JTAGBone prošel 20/20 pingů bez
+reconnectu RJ45.
 
 ## Skutečná příčina poslední TX závady
 
@@ -66,10 +82,11 @@ ACK na chybně dekódované adrese.
 Pro spolehlivou diagnostiku:
 
 ```sh
-../.venv/bin/python -m litex.tools.litex_server \
+source ./litex_env.sh
+"$PYTHON" -m litex.tools.litex_server \
   --jtag --jtag-config openocd_cyc1000.cfg --jtag-chain 1 --bind-port 1235
 
-../.venv/bin/python -m litex.tools.litex_client \
+"$PYTHON" -m litex.tools.litex_client \
   --host localhost --port 1235 --csr-csv build/csr.csv \
   --strict-timeout --ident
 ```
@@ -105,8 +122,8 @@ Před opravou TX mapy bylo ověřeno:
 ## Utilizace finálního bitstreamu
 
 ```text
-Logic elements:     23 625 / 24 624  (96 %)
-LABs:                1 534 / 1 539   (100 %, 5 volných)
+Logic elements:     23 545 / 24 624  (96 %)
+LABs:                1 537 / 1 539   (100 %, 2 volné)
 Registers:          18 386 / 25 304  (73 %)
 Block memory bits: 456 544 / 608 256 (75 %)
 ```

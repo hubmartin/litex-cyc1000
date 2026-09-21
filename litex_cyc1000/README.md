@@ -53,9 +53,16 @@ it as regular user I/O after configuration so it can carry `CRS_DV`.
 ./console.sh     # /dev/ttyUSB1, 115200 Bd
 ```
 
-After loading or flashing, physically reconnect RJ45 so the separately powered
-LAN8720 restarts/autonegotiates against the reset RMII MAC. The verified link is
-100BASE-TX full duplex.
+The Python-based build and console scripts source `litex_env.sh`. The virtual
+environment supplies the Python interpreter and external dependencies, while
+LiteX, LiteEth, LiteDRAM, Migen, LiteX-Boards, LiteVideo and the Python data
+packages are imported directly from the commits pinned in `../third_party/`.
+Copies in `.venv/site-packages` cannot override them.
+
+If the link does not recover after loading or flashing, physically reconnect
+RJ45 to force link-down/link-up and autonegotiation. The verified link is
+100BASE-TX full duplex; a reconnect is not normally required by the final
+image.
 
 Test the application stack from a host on the same subnet:
 
@@ -73,14 +80,15 @@ this is a software throughput limit rather than an RMII link error.
 Start the local bridge using the included OpenOCD configuration:
 
 ```sh
-../.venv/bin/python -m litex.tools.litex_server \
+source ./litex_env.sh
+"$PYTHON" -m litex.tools.litex_server \
   --jtag --jtag-config openocd_cyc1000.cfg --jtag-chain 1 --bind-port 1235
 ```
 
 Then connect one client at a time:
 
 ```sh
-../.venv/bin/python -m litex.tools.litex_client \
+"$PYTHON" -m litex.tools.litex_client \
   --host localhost --port 1235 --csr-csv build/csr.csv --ident
 ```
 
@@ -109,8 +117,8 @@ Quartus 25.1 Standard, final application-Ethernet build:
 
 | Resource | Used | Available | Utilization |
 | --- | ---: | ---: | ---: |
-| Logic elements | 23,625 | 24,624 | 96% |
-| LABs | 1,534 | 1,539 | 100% (5 free) |
+| Logic elements | 23,545 | 24,624 | 96% |
+| LABs | 1,537 | 1,539 | 100% (2 free) |
 | Registers | 18,386 | 25,304 | 73% |
 | Block-memory bits | 456,544 | 608,256 | 75% |
 
