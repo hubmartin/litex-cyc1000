@@ -4,7 +4,7 @@ set -euo pipefail
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 zephyr_base="${ZEPHYR_BASE:-/home/martin/dev/zephyr/zephyrproject/zephyr}"
 overlay="$project_dir/boards/litex_vexriscv.overlay"
-buttons_overlay="$project_dir/boards/cyc1000-buttons.overlay"
+buttons_overlay="$project_dir/boards/cyc1000-buttons.generated.overlay"
 
 if [[ ! -f "$overlay" ]]; then
 	printf 'Missing %s\nRun scripts/build-gateware-etherbone.sh and scripts/generate-dts-overlay.sh first.\n' "$overlay" >&2

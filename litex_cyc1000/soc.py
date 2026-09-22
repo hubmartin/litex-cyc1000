@@ -227,7 +227,8 @@ class BaseSoC(SoCCore):
                     # that bit is one, so the TX SRAM never acknowledges writes.
                     # Two RX slots align the TX window at +0x1000.
                     nrxslots   = 2,
-                    ntxslots   = 1,
+                    # Zephyr's LiteEth driver alternates between two TX slots.
+                    ntxslots   = 2,
                 )
                 # Run the BIOS software network stack, but skip automatic TFTP boot.
                 self.add_constant("NET_BOOT_DISABLE")

@@ -20,7 +20,7 @@
 		#gpio-cells = <2>;
 		ngpios = <1>;
 		interrupt-parent = <&intc0>;
-		interrupts = <2 1>;
+		interrupts = <@BUTTONS_IRQ@ 1>;
 		status = "okay";
 	};
 

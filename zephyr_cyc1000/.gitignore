@@ -1,2 +1,3 @@
 /build/
 /boards/litex_vexriscv.overlay
+/boards/cyc1000-buttons.generated.overlay
