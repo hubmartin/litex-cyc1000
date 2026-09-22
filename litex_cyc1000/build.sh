@@ -4,7 +4,7 @@ cd -- "$(dirname -- "$0")"
 source ./litex_env.sh
 export PATH=/home/martin/altera_lite/25.1std/quartus/bin:$PATH
 "$PYTHON" soc.py \
-  --build --with-buttons --no-led-chaser --with-ethernet --eth-ip 192.168.1.241 \
+  --build --with-buttons --with-ethernet --eth-ip 192.168.1.241 \
   --cpu-variant=minimal --integrated-main-ram-size 8192 \
   --with-jtagbone \
   --sys-clk-freq 50e6 --output-dir build
