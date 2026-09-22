@@ -6,6 +6,8 @@
 # Copyright (c) 2021 Jakub Cabal <jakubcabal@gmail.com>
 # SPDX-License-Identifier: BSD-2-Clause
 
+import os
+
 from migen import *
 
 from litex.gen import *
@@ -15,6 +17,7 @@ from litex_boards.platforms import trenz_cyc1000
 from litex.soc.cores.clock import Cyclone10LPPLL
 from litex.soc.integration.soc import *
 from litex.soc.integration.builder import *
+from litex.soc.interconnect import wishbone
 from litex.soc.cores.led import LedChaser
 from litex.soc.cores.gpio import GPIOIn
 from litex.build.generic_platform import IOStandard, Pins, Subsignal
@@ -23,6 +26,58 @@ from liteeth.phy.rmii import LiteEthPHYRMII
 
 from litedram.modules import W9864G6JT
 from litedram.phy import GENSDRPHY
+
+
+# ASMI XIP -----------------------------------------------------------------------------------------
+
+class ASMIFlashXIP(LiteXModule):
+    """Wishbone adapter for the dedicated Active-Serial flash interface."""
+    def __init__(self, platform, flash_offset):
+        self.bus = wishbone.Interface(data_width=32, adr_width=19, mode="r")
+
+        avl_address       = Signal(19)
+        avl_read          = Signal()
+        avl_waitrequest   = Signal()
+        avl_readdata      = Signal(32)
+        avl_readdatavalid = Signal()
+        busy              = Signal()
+
+        # The ASMI Avalon port is word-addressed (the generated IP converts
+        # it to byte addresses itself). The SoC bus strips the XIP origin, so
+        # add only the flash offset expressed in 32-bit words.
+        self.comb += [
+            avl_address.eq(self.bus.adr + flash_offset//4),
+            avl_read.eq(self.bus.cyc & self.bus.stb & ~busy),
+            self.bus.dat_r.eq(avl_readdata),
+            self.bus.ack.eq(busy & avl_readdatavalid),
+        ]
+        self.sync += If(~busy,
+            If(self.bus.cyc & self.bus.stb & ~avl_waitrequest,
+                busy.eq(1)
+            )
+        ).Elif(avl_readdatavalid,
+            busy.eq(0)
+        )
+
+        ip_dir = os.path.join(os.path.dirname(__file__), "ip", "asmi_xip")
+        platform.add_ip(os.path.join(ip_dir, "asmi_xip.qip"))
+        self.specials += Instance("asmi_xip",
+            i_clk_clk                   = ClockSignal(),
+            i_reset_reset_n             = ~ResetSignal(),
+            i_avl_csr_address           = 0,
+            i_avl_csr_read              = 0,
+            i_avl_csr_write             = 0,
+            i_avl_csr_writedata         = 0,
+            i_avl_mem_write             = 0,
+            i_avl_mem_burstcount        = 1,
+            i_avl_mem_read              = avl_read,
+            i_avl_mem_address           = avl_address,
+            i_avl_mem_writedata         = 0,
+            i_avl_mem_byteenable        = 0b1111,
+            o_avl_mem_waitrequest       = avl_waitrequest,
+            o_avl_mem_readdata          = avl_readdata,
+            o_avl_mem_readdatavalid     = avl_readdatavalid,
+        )
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -50,6 +105,13 @@ class _CRG(LiteXModule):
 # BaseSoC ------------------------------------------------------------------------------------------
 
 class BaseSoC(SoCCore):
+    # FPGA configuration occupies the beginning of the 2 MiB flash.  The BIOS
+    # is placed at XIP_FLASH_OFFSET and presented directly at XIP_CPU_ORIGIN.
+    mem_map = {**SoCCore.mem_map, **{"spiflash": 0x20100000}}
+    XIP_FLASH_OFFSET = 0x00100000
+    XIP_CPU_ORIGIN   = 0x20100000
+    XIP_ROM_SIZE     = 0x00020000
+
     def __init__(self, sys_clk_freq=50e6, with_led_chaser=True, with_buttons=False,
         with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.241",
         eth_dynamic_ip=False, **kwargs):
@@ -83,7 +145,24 @@ class BaseSoC(SoCCore):
         self.crg = _CRG(platform, sys_clk_freq)
 
         # SoCCore ----------------------------------------------------------------------------------
+        # Keep program code exclusively in external SPI flash.  There is no
+        # initialized integrated ROM in this configuration.
+        kwargs["integrated_rom_size"] = 0
+        kwargs["cpu_reset_address"]   = self.XIP_CPU_ORIGIN
         SoCCore.__init__(self, platform, sys_clk_freq, ident="LiteX SoC on CYC1000", **kwargs)
+
+        # Dedicated Active-Serial XIP ----------------------------------------------------------
+        # The hard ASMI block is the only logic permitted to access the four
+        # configuration-flash pins after FPGA configuration. It serves BIOS
+        # fetches directly from the W25Q16; no initialized BRAM ROM is used.
+        self.asmi_xip = ASMIFlashXIP(platform, self.XIP_FLASH_OFFSET)
+        self.bus.add_slave("rom", self.asmi_xip.bus, SoCRegion(
+            origin = self.XIP_CPU_ORIGIN,
+            size   = self.XIP_ROM_SIZE,
+            mode   = "rx",
+            cached = True,
+            linker = True,
+        ), strip_origin=True)
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
