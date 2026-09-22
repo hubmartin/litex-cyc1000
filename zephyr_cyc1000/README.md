@@ -45,6 +45,13 @@ The script loads the FPGA SRAM image and transfers zephyr.bin using the LiteX
 serial boot protocol, then stays attached to the UART. The startup line is
 followed by the cyc1000:~$ prompt; use help and cyc1000_info.
 
+## UART logs and button
+
+Zephyr logs share the UART with the shell. Two application threads emit
+`1 s task heartbeat` and `2 s task heartbeat` at one- and two-second
+intervals. The CYC1000 push button is exposed as an interrupt-driven Zephyr
+`gpio-keys` input; a press emits `CYC1000 button pressed` to the UART log.
+
 ## Persistent flash boot
 
 The Etherbone gateware build enables LiteX flash boot. At reset BIOS validates

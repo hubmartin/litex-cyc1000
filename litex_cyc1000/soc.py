@@ -241,7 +241,10 @@ class BaseSoC(SoCCore):
 
         # Buttons ----------------------------------------------------------------------------------
         if with_buttons:
-            self.buttons = GPIOIn(Cat(platform.request_all("key")))
+            # Expose the CYC1000 push button as an interrupt-capable LiteX
+            # GPIO so Zephyr can use its standard gpio-keys input driver.
+            self.buttons = GPIOIn(Cat(platform.request_all("key")), with_irq=True)
+            self.irq.add("buttons", use_loc_if_exists=True)
 
 # Build --------------------------------------------------------------------------------------------
 
