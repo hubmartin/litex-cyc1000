@@ -9,6 +9,7 @@
 import os
 
 from migen import *
+from migen.genlib.resetsync import AsyncResetSynchronizer
 
 from litex.gen import *
 
@@ -94,10 +95,18 @@ class _CRG(LiteXModule):
 
         # PLL
         self.pll = pll = Cyclone10LPPLL(speedgrade="-C8")
-        self.comb += pll.reset.eq(self.rst)
         pll.register_clkin(clk12, 12e6)
-        pll.create_clkout(self.cd_sys,    sys_clk_freq)
-        pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90)
+        # A LiteX SoC reset is a one-cycle CSR pulse. Resetting the PLL with
+        # it is too short for a reliable Cyclone 10 LP PLL relock and can make
+        # a Zephyr ``kernel reboot`` hang immediately after the BIOS jumps to
+        # SDRAM. Keep the PLL running and reset all logic synchronously; a
+        # power/configuration reset is still held until the PLL reports lock.
+        pll.create_clkout(self.cd_sys,    sys_clk_freq, with_reset=False)
+        pll.create_clkout(self.cd_sys_ps, sys_clk_freq, phase=90, with_reset=False)
+        self.specials += [
+            AsyncResetSynchronizer(self.cd_sys,    ~pll.locked | self.rst),
+            AsyncResetSynchronizer(self.cd_sys_ps, ~pll.locked | self.rst),
+        ]
 
         # SDRAM clock
         self.comb += platform.request("sdram_clock").eq(self.cd_sys_ps.clk)
@@ -111,10 +120,11 @@ class BaseSoC(SoCCore):
     XIP_FLASH_OFFSET = 0x00100000
     XIP_CPU_ORIGIN   = 0x20100000
     XIP_ROM_SIZE     = 0x00020000
+    ZEPHYR_FLASH_OFFSET = 0x00120000
 
     def __init__(self, sys_clk_freq=50e6, with_led_chaser=True, with_buttons=False,
         with_ethernet=False, with_etherbone=False, eth_ip="192.168.1.241",
-        eth_dynamic_ip=False, **kwargs):
+        eth_dynamic_ip=False, with_zephyr_flash_boot=False, **kwargs):
         platform = trenz_cyc1000.Platform()
         # F16 is PMOD PIO_03 and also the optional nCEO configuration pin.
         # CYC1000 does not use nCEO for its single-FPGA configuration chain.
@@ -159,14 +169,28 @@ class BaseSoC(SoCCore):
         # The hard ASMI block is the only logic permitted to access the four
         # configuration-flash pins after FPGA configuration. It serves BIOS
         # fetches directly from the W25Q16; no initialized BRAM ROM is used.
+        # Normal BIOS mapping is 128 KiB. Zephyr flash boot maps the complete
+        # second flash megabyte: BIOS at 0x00100000 followed by Zephyr.
+        xip_rom_size = 0x00100000 if with_zephyr_flash_boot else self.XIP_ROM_SIZE
         self.asmi_xip = ASMIFlashXIP(platform, self.XIP_FLASH_OFFSET)
         self.bus.add_slave("rom", self.asmi_xip.bus, SoCRegion(
             origin = self.XIP_CPU_ORIGIN,
-            size   = self.XIP_ROM_SIZE,
+            size   = xip_rom_size,
             mode   = "rx",
             cached = True,
             linker = True,
         ), strip_origin=True)
+
+        if with_zephyr_flash_boot:
+            zephyr_flash_address = self.XIP_CPU_ORIGIN + (
+                self.ZEPHYR_FLASH_OFFSET - self.XIP_FLASH_OFFSET)
+            # BIOS validates the FBI length/CRC, copies it to SDRAM and jumps.
+            # A bad or absent image falls through to serial boot for recovery.
+            self.add_constant("FLASH_BOOT_ADDRESS", zephyr_flash_address)
+            self.add_constant("FLASH_BOOT_REGION_BASE", self.XIP_CPU_ORIGIN)
+            self.add_constant("FLASH_BOOT_REGION_SIZE", xip_rom_size)
+            self.add_constant("FLASH_BOOT_PRIORITY", 0)
+            self.add_constant("SERIAL_BOOT_PRIORITY", 10)
 
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
@@ -232,6 +256,8 @@ def main():
     ethopts.add_argument("--with-etherbone", action="store_true", help="Enable LiteEth Etherbone.")
     parser.add_target_argument("--eth-ip",              default="192.168.1.241", help="Static IPv4 address.")
     parser.add_target_argument("--eth-dynamic-ip",      action="store_true",      help="Use DHCP instead of static IPv4.")
+    parser.add_target_argument("--with-zephyr-flash-boot", action="store_true",
+        help="Boot a CRC-checked Zephyr FBI image from SPI flash, with UART fallback.")
     args = parser.parse_args()
 
     soc = BaseSoC(
@@ -242,6 +268,7 @@ def main():
         with_etherbone = args.with_etherbone,
         eth_ip        = args.eth_ip,
         eth_dynamic_ip = args.eth_dynamic_ip,
+        with_zephyr_flash_boot = args.with_zephyr_flash_boot,
         **parser.soc_argdict
     )
     builder = Builder(soc, **parser.builder_argdict)
