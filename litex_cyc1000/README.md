@@ -12,8 +12,10 @@ LiteX BIOS and a Waveshare LAN8720 RMII Ethernet module.
 - ARP and ICMP echo replies (ping);
 - 2 RX slots and 1 TX slot;
 - VexRiscv `minimal` and 8 KiB integrated main RAM;
+- BIOS executed in place (XIP) through the Cyclone 10 LP dedicated ASMI port from the on-board 2 MiB SPI flash (W25Q16) at flash
+  offset `0x00100000` (no initialized BIOS BRAM);
 - UART at 115200 Bd and JTAGBone for local Wishbone diagnostics;
-- TFTP netboot and the LED chaser disabled.
+- TFTP netboot disabled; the LED chaser is enabled as a gateware indicator.
 
 This bitstream does **not** contain Etherbone, TCP, HTTP, SSH or an Ethernet
 shell. JTAGBone provides CSR/memory access through the USB/JTAG cable, not over
@@ -49,8 +51,8 @@ it as regular user I/O after configuration so it can carry `CRS_DV`.
 ```sh
 ./build.sh       # build gateware and BIOS
 ./load.sh        # load SRAM; lost after power-off
-./flash.sh       # explicitly program configuration flash
-./console.sh     # /dev/ttyUSB1, 115200 Bd
+./flash.sh       # program configuration at offset 0 and XIP BIOS at 1 MiB
+./console.sh     # /dev/ttyUSB3, 115200 Bd
 ```
 
 The Python-based build and console scripts source `litex_env.sh`. The virtual
@@ -58,6 +60,13 @@ environment supplies the Python interpreter and external dependencies, while
 LiteX, LiteEth, LiteDRAM, Migen, LiteX-Boards, LiteVideo and the Python data
 packages are imported directly from the commits pinned in `../third_party/`.
 Copies in `.venv/site-packages` cannot override them.
+
+`flash.sh` writes and verifies the `.rbf` configuration image first (so
+openFPGALoader applies Active-Serial bit ordering), then writes and verifies
+the raw BIOS at flash offset `0x00100000`. It finally loads the RBF into SRAM
+because the temporary SPI-over-JTAG programmer does not reconfigure the FPGA
+after writing. To use a different serial device, set `LITEX_UART`, for
+example `LITEX_UART=/dev/ttyUSB2 ./console.sh`.
 
 If the link does not recover after loading or flashing, physically reconnect
 RJ45 to force link-down/link-up and autonegotiation. The verified link is
