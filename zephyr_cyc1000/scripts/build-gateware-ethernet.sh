@@ -9,7 +9,7 @@ source ./litex_env.sh
 export PATH=/home/martin/altera_lite/25.1std/quartus/bin:$PATH
 
 "$PYTHON" soc.py \
-  --build --with-buttons --with-ethernet --with-jtagbone --with-zephyr-flash-boot --eth-ip "${ZEPHYR_IP:-192.168.1.241}" \
+  --build --with-buttons --with-ethernet --with-jtagbone --with-zephyr-flash-boot --eth-dynamic-ip \
   --cpu-variant=lite --uart-fifo-depth 512 --uart-rx-fifo-rx-we --timer-uptime --sys-clk-freq 50e6 \
   --output-dir build-zephyr-ethernet
 

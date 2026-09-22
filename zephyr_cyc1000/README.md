@@ -33,9 +33,8 @@ The second command records its UART, timer and SDRAM addresses in
 boards/litex_vexriscv.overlay. Do not reuse an overlay from another LiteX
 build.
 
-Set ZEPHYR_IP to change the static Zephyr IPv4 address, for example:
-
-    ZEPHYR_IP=192.168.1.241 ./scripts/build-gateware-ethernet.sh
+The Ethernet gateware uses dynamic IP mode; address assignment is done by
+Zephyr (DHCPv4 and IPv6 Router Advertisements), not by a fixed LiteX address.
 
 ## Load and use
 
@@ -47,11 +46,18 @@ followed by the cyc1000:~$ prompt; use help and cyc1000_info.
 
 ## Ethernet
 
-The Ethernet profile assigns Zephyr the static address `192.168.1.241/24`.
-LiteX owns the RMII and MAC hardware; Zephyr uses the LiteEth CSR and buffer
-RAM driver. From a host on the same subnet, verify it with:
+The Ethernet profile obtains its IPv4 address through DHCPv4. LiteX owns the
+RMII and MAC hardware; Zephyr uses the LiteEth CSR and buffer RAM driver.
+Use `net iface` on the UART to see the assigned address, then verify it from
+a host on the same subnet.
 
-    ping 192.168.1.241
+The previously used static `192.168.1.241/24` address is no longer configured.
+
+The LAN router advertises IPv6 prefix `2a00:6500:2811:6d00::/64`. Zephyr uses
+SLAAC for its stable global address and RFC 8981 Privacy Extensions for a
+second, temporary global address. The temporary address is preferred for
+outbound connections and rotates; use the stable SLAAC address for a service
+that needs a durable inbound address. Inspect both addresses with `net iface`.
 
 The application also provides a deliberately small test HTTP server on port
 80. Its static status page verifies the complete TCP path:

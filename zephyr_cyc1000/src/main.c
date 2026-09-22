@@ -86,13 +86,9 @@ static void mqtt_event_handler(struct mqtt_client *client,
 	if (evt->type == MQTT_EVT_CONNACK) {
 		if (evt->result == 0) {
 			mqtt_connected = true;
-			LOG_INF("MQTT connected to nasbuntu.home");
-		} else {
-			LOG_ERR("MQTT CONNACK failed: %d", evt->result);
 		}
 	} else if (evt->type == MQTT_EVT_DISCONNECT) {
 		mqtt_connected = false;
-		LOG_WRN("MQTT disconnected: %d", evt->result);
 	}
 }
 
@@ -168,19 +164,11 @@ static void mqtt_publisher(void *p1, void *p2, void *p3)
 		int rc = mqtt_connect_to_broker(&client);
 
 		if (rc != 0) {
-			LOG_WRN("MQTT connect to %s:%d failed: %d", MQTT_BROKER_ADDR,
-				MQTT_PORT, rc);
 			k_sleep(K_SECONDS(5));
 			continue;
 		}
 
-		rc = mqtt_publish_test(&client, sequence++);
-		if (rc == 0) {
-			LOG_INF("MQTT published to " MQTT_TOPIC);
-		} else {
-			LOG_WRN("MQTT publish failed: %d", rc);
-		}
-
+		(void)mqtt_publish_test(&client, sequence++);
 		(void)mqtt_disconnect(&client);
 		k_sleep(K_SECONDS(10));
 	}
