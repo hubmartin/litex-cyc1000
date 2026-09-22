@@ -151,6 +151,10 @@ class BaseSoC(SoCCore):
         kwargs["cpu_reset_address"]   = self.XIP_CPU_ORIGIN
         SoCCore.__init__(self, platform, sys_clk_freq, ident="LiteX SoC on CYC1000", **kwargs)
 
+        # Preserve UART input across occasional XIP cache misses and expose
+        # framing/overflow evidence to BIOS diagnostics.
+        self.uart.add_rx_error_status()
+
         # Dedicated Active-Serial XIP ----------------------------------------------------------
         # The hard ASMI block is the only logic permitted to access the four
         # configuration-flash pins after FPGA configuration. It serves BIOS
@@ -241,6 +245,11 @@ def main():
         **parser.soc_argdict
     )
     builder = Builder(soc, **parser.builder_argdict)
+    # Build the normal LiteX BIOS from a local overlay.  The overlay adds the
+    # user firmware sources to bios.bin while the upstream BIOS remains an
+    # untouched pinned submodule.
+    builder.add_software_package("bios", os.path.join(
+        os.path.dirname(__file__), "firmware", "bios"))
     if args.build:
         builder.build(**parser.toolchain_argdict)
 

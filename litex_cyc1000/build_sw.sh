@@ -5,7 +5,7 @@ cd -- "$(dirname -- "$0")"
 source ./litex_env.sh
 "$PYTHON" soc.py \
   --build --no-compile-gateware \
-  --with-buttons --no-led-chaser --with-ethernet --eth-ip 192.168.1.241 \
-  --cpu-variant=minimal --integrated-main-ram-size 8192 \
+  --with-buttons --with-ethernet --eth-ip 192.168.1.241 \
+  --cpu-variant=lite --uart-fifo-depth 512 \
   --with-jtagbone \
   --sys-clk-freq 50e6 --output-dir build

@@ -11,9 +11,9 @@ LiteX BIOS and a Waveshare LAN8720 RMII Ethernet module.
 - CPU-driven LiteEth MAC and BIOS network stack;
 - ARP and ICMP echo replies (ping);
 - 2 RX slots and 1 TX slot;
-- VexRiscv `minimal` and 8 KiB integrated main RAM;
+- VexRiscv `lite` with instruction cache, 8 KiB L2 cache and 8 MiB external SDR SDRAM main RAM;
 - BIOS executed in place (XIP) through the Cyclone 10 LP dedicated ASMI port from the on-board 2 MiB SPI flash (W25Q16) at flash
-  offset `0x00100000` (no initialized BIOS BRAM);
+  offset `0x00100000`; neither the BIOS nor the user firmware occupies an initialized BRAM ROM;
 - UART at 115200 Bd and JTAGBone for local Wishbone diagnostics;
 - TFTP netboot disabled; the LED chaser is enabled as a gateware indicator.
 
@@ -67,6 +67,17 @@ the raw BIOS at flash offset `0x00100000`. It finally loads the RBF into SRAM
 because the temporary SPI-over-JTAG programmer does not reconfigure the FPGA
 after writing. To use a different serial device, set `LITEX_UART`, for
 example `LITEX_UART=/dev/ttyUSB2 ./console.sh`.
+
+The VexRiscv `lite` instruction cache is required for responsive execution
+from ASMI XIP flash. The UART uses a 512-byte hardware FIFO and exports sticky
+RX framing/overflow status for diagnostics.
+
+## User firmware
+
+[`firmware/`](firmware/README.md) is a local BIOS overlay. Its sources compile
+into the same `bios.bin` as the upstream LiteX BIOS and therefore execute from
+SPI XIP flash. It does not modify the LiteX BIOS submodule. The test command
+`main` runs the software LED sweep and then returns to the normal BIOS shell.
 
 If the link does not recover after loading or flashing, physically reconnect
 RJ45 to force link-down/link-up and autonegotiation. The verified link is
@@ -126,10 +137,18 @@ Quartus 25.1 Standard, final application-Ethernet build:
 
 | Resource | Used | Available | Utilization |
 | --- | ---: | ---: | ---: |
-| Logic elements | 23,545 | 24,624 | 96% |
-| LABs | 1,537 | 1,539 | 100% (2 free) |
-| Registers | 18,386 | 25,304 | 73% |
-| Block-memory bits | 456,544 | 608,256 | 75% |
+| Logic elements | 7,455 | 24,624 | 30% |
+| Combinational functions | 6,564 | 24,624 | 27% |
+| Registers | 4,189 | 25,304 | 17% |
+| Block-memory bits | 208,608 | 608,256 | 34% |
+| Pins | 65 | 151 | 43% |
+| PLLs | 1 | 4 | 25% |
+
+The 34% block-memory figure includes the VexRiscv instruction cache, 8 KiB L2
+cache, LiteDRAM buffers, and 512-byte UART FIFOs. XIP removes the initialized
+BIOS ROM from BRAM; code is read from external SPI flash at run time instead.
+The on-board test passed SDRAM initialization and a 2 MiB boot-time memtest;
+the sequential benchmark measured 14.3 MiB/s writes and 24.3 MiB/s reads.
 
 The resolved bring-up history and measurements are in
 [`ETH_TROUBLESHOOTING.md`](ETH_TROUBLESHOOTING.md).
