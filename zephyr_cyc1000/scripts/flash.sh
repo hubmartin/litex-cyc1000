@@ -4,7 +4,7 @@ set -euo pipefail
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 litex_dir="$project_dir/../litex_cyc1000"
-litex_build="${LITEX_BUILD:-build-zephyr-etherbone}"
+litex_build="${LITEX_BUILD:-build-zephyr-ethernet}"
 gateware="$litex_dir/$litex_build/gateware/trenz_cyc1000.rbf"
 bios="$litex_dir/$litex_build/software/bios/bios.bin"
 zephyr_image="$project_dir/build/zephyr/zephyr.fbi"

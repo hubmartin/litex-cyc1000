@@ -64,13 +64,6 @@ The application also provides a deliberately small test HTTP server on port
 
     curl http://192.168.1.241/
 
-It publishes `CYC1000 Zephyr test message <n>` every 10 seconds to MQTT topic
-`cyc1000/test`. The broker is `nasbuntu.home` (`192.168.1.112`) on TCP port
-1883; it is intentionally configured by numeric address in firmware, so it
-does not depend on a DNS server. For example, receive the test traffic with:
-
-    bch -H 192.168.1.112 sub cyc1000/test
-
 The UART shell network diagnostics are enabled and show useful runtime state:
 
     net stats

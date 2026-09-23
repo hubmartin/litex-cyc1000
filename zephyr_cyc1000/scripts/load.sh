@@ -12,6 +12,6 @@ fi
 
 cd "$litex_dir"
 source ./litex_env.sh
-openFPGALoader --board cyc1000 build-zephyr-etherbone/gateware/trenz_cyc1000.rbf
+openFPGALoader --board cyc1000 build-zephyr-ethernet/gateware/trenz_cyc1000.rbf
 exec "$PYTHON" -m litex.tools.litex_term "${LITEX_UART:-/dev/ttyUSB3}" \
 	--speed 115200 --serial-boot --kernel "$kernel"
