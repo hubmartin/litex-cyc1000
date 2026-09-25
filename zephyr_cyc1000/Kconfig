@@ -1,0 +1,15 @@
+source "Kconfig.zephyr"
+
+menu "CYC1000 options"
+
+config CYC1000_ASMI_FLASH
+	bool "CYC1000 ASMI configuration-flash driver"
+	default y
+	select FLASH
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_EXPLICIT_ERASE
+	select FLASH_HAS_PAGE_LAYOUT
+	help
+	  Exposes the mutable tail of the on-board W25Q16 through the LiteX ASMI IP.
+
+endmenu

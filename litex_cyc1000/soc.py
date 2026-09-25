@@ -32,28 +32,40 @@ from litedram.phy import GENSDRPHY
 # ASMI XIP -----------------------------------------------------------------------------------------
 
 class ASMIFlashXIP(LiteXModule):
-    """Wishbone adapter for the dedicated Active-Serial flash interface."""
+    """Wishbone adapters for XIP and mutable Active-Serial flash data."""
     def __init__(self, platform, flash_offset):
-        self.bus = wishbone.Interface(data_width=32, adr_width=19, mode="r")
+        self.bus = wishbone.Interface(data_width=32, adr_width=19, mode="rw")
+        self.csr_bus = wishbone.Interface(data_width=32, adr_width=6)
 
         avl_address       = Signal(19)
         avl_read          = Signal()
+        avl_write         = Signal()
         avl_waitrequest   = Signal()
         avl_readdata      = Signal(32)
         avl_readdatavalid = Signal()
         busy              = Signal()
+        avl_csr_readdata = Signal(32)
+        avl_csr_waitrequest = Signal()
+        avl_csr_readdatavalid = Signal()
 
         # The ASMI Avalon port is word-addressed (the generated IP converts
         # it to byte addresses itself). The SoC bus strips the XIP origin, so
         # add only the flash offset expressed in 32-bit words.
         self.comb += [
             avl_address.eq(self.bus.adr + flash_offset//4),
-            avl_read.eq(self.bus.cyc & self.bus.stb & ~busy),
+            avl_read.eq(self.bus.cyc & self.bus.stb & ~self.bus.we & ~busy),
+            avl_write.eq(self.bus.cyc & self.bus.stb & self.bus.we & ~busy),
             self.bus.dat_r.eq(avl_readdata),
-            self.bus.ack.eq(busy & avl_readdatavalid),
+            self.bus.ack.eq((busy & avl_readdatavalid) |
+                            (self.bus.we & self.bus.cyc & self.bus.stb &
+                             ~busy & ~avl_waitrequest)),
+            self.csr_bus.dat_r.eq(avl_csr_readdata),
+            self.csr_bus.ack.eq((self.csr_bus.cyc & self.csr_bus.stb &
+                                  self.csr_bus.we & ~avl_csr_waitrequest) |
+                                 (~self.csr_bus.we & avl_csr_readdatavalid)),
         ]
         self.sync += If(~busy,
-            If(self.bus.cyc & self.bus.stb & ~avl_waitrequest,
+            If(self.bus.cyc & self.bus.stb & ~self.bus.we & ~avl_waitrequest,
                 busy.eq(1)
             )
         ).Elif(avl_readdatavalid,
@@ -65,16 +77,19 @@ class ASMIFlashXIP(LiteXModule):
         self.specials += Instance("asmi_xip",
             i_clk_clk                   = ClockSignal(),
             i_reset_reset_n             = ~ResetSignal(),
-            i_avl_csr_address           = 0,
-            i_avl_csr_read              = 0,
-            i_avl_csr_write             = 0,
-            i_avl_csr_writedata         = 0,
-            i_avl_mem_write             = 0,
+            i_avl_csr_address           = self.csr_bus.adr,
+            i_avl_csr_read              = self.csr_bus.cyc & self.csr_bus.stb & ~self.csr_bus.we,
+            o_avl_csr_readdata          = avl_csr_readdata,
+            i_avl_csr_write             = self.csr_bus.cyc & self.csr_bus.stb & self.csr_bus.we,
+            i_avl_csr_writedata         = self.csr_bus.dat_w,
+            o_avl_csr_waitrequest       = avl_csr_waitrequest,
+            o_avl_csr_readdatavalid     = avl_csr_readdatavalid,
+            i_avl_mem_write             = avl_write,
             i_avl_mem_burstcount        = 1,
             i_avl_mem_read              = avl_read,
             i_avl_mem_address           = avl_address,
-            i_avl_mem_writedata         = 0,
-            i_avl_mem_byteenable        = 0b1111,
+            i_avl_mem_writedata         = self.bus.dat_w,
+            i_avl_mem_byteenable        = self.bus.sel,
             o_avl_mem_waitrequest       = avl_waitrequest,
             o_avl_mem_readdata          = avl_readdata,
             o_avl_mem_readdatavalid     = avl_readdatavalid,
@@ -179,6 +194,9 @@ class BaseSoC(SoCCore):
             mode   = "rx",
             cached = True,
             linker = True,
+        ), strip_origin=True)
+        self.bus.add_slave("asmi_flash_ctrl", self.asmi_xip.csr_bus, SoCRegion(
+            origin = 0xf0010000, size = 0x100, mode = "rw", cached = False,
         ), strip_origin=True)
 
         if with_zephyr_flash_boot:

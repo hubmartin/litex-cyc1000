@@ -5,6 +5,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 zephyr_base="${ZEPHYR_BASE:-/home/martin/dev/zephyr/zephyrproject/zephyr}"
 overlay="$project_dir/boards/litex_vexriscv.overlay"
 buttons_overlay="$project_dir/boards/cyc1000-buttons.generated.overlay"
+flash_overlay="$project_dir/boards/cyc1000-flash.overlay"
 
 if [[ ! -f "$overlay" ]]; then
 	printf 'Missing %s\nRun scripts/build-gateware-etherbone.sh and scripts/generate-dts-overlay.sh first.\n' "$overlay" >&2
@@ -13,6 +14,11 @@ fi
 
 if [[ ! -f "$buttons_overlay" ]]; then
 	printf 'Missing %s\n' "$buttons_overlay" >&2
+	exit 1
+fi
+
+if [[ ! -f "$flash_overlay" ]]; then
+	printf 'Missing %s\n' "$flash_overlay" >&2
 	exit 1
 fi
 
@@ -31,4 +37,4 @@ fi
 
 exec "$west_bin" build --pristine=always --board litex_vexriscv/litex_vexriscv \
 	--build-dir "$project_dir/build" "$project_dir" \
-	-- -DDTC_OVERLAY_FILE="$overlay;$buttons_overlay"
+	-- -DDTC_OVERLAY_FILE="$overlay;$buttons_overlay;$flash_overlay"

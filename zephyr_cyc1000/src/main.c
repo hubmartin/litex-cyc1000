@@ -2,6 +2,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/input/input.h>
+#include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/shell/shell.h>
@@ -13,6 +14,9 @@
 LOG_MODULE_REGISTER(cyc1000, LOG_LEVEL_INF);
 
 #define HTTP_PORT 80
+
+#define LFS_NODE DT_NODELABEL(lfs_storage)
+FS_FSTAB_DECLARE_ENTRY(LFS_NODE);
 
 #define HTTP_STACK_SIZE 1536
 
@@ -108,6 +112,12 @@ SHELL_CMD_REGISTER(cyc1000_info, NULL, "Show CYC1000 Zephyr configuration", cmd_
 
 int main(void)
 {
+	int lfs_rc = fs_mount(&FS_FSTAB_ENTRY(LFS_NODE));
+	if (lfs_rc && lfs_rc != -EBUSY) {
+		LOG_ERR("LittleFS mount failed: %d", lfs_rc);
+	} else {
+		LOG_INF("LittleFS mounted at /lfs");
+	}
 	printk("\nCYC1000 Zephyr started. Type 'help' for the UART shell.\n");
 	LOG_INF("UART logging, button input, LiteEth and HTTP are active");
 	return 0;

@@ -1,0 +1,39 @@
+/* W25Q16 physical tail 0x1c0000..0x1fffff, mapped at +0xc0000 here. */
+/ {
+	asmi_controller: asmi-controller@f0010000 {
+		status = "okay";
+		reg = <0xf0010000 0x100>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		asmi_flash: flash@20100000 {
+		compatible = "soc-nv-flash";
+		reg = <0x20100000 0x100000>, <0xf0010000 0x100>;
+		reg-names = "memory", "control";
+		erase-block-size = <4096>;
+		write-block-size = <1>;
+		status = "okay";
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			storage_partition: partition@c0000 {
+				label = "littlefs";
+				reg = <0x000c0000 0x00040000>;
+			};
+		};
+		};
+	};
+	fstab {
+		compatible = "zephyr,fstab";
+		lfs_storage: lfs_storage {
+			compatible = "zephyr,fstab,littlefs";
+			partition = <&storage_partition>;
+			mount-point = "/lfs";
+			read-size = <16>;
+			prog-size = <16>;
+			cache-size = <256>;
+			lookahead-size = <16>;
+			block-cycles = <512>;
+		};
+	};
+};
