@@ -73,6 +73,26 @@ maps the last 256 KiB of the flash (0x1c0000..0x1fffff) as a writable,
 uncached `storage` region at `0x90000000` with an `asmi_erase`/`asmi_status`
 4 KiB erase engine restricted to that range. The XIP window stays read-only.
 
+All flash reads go through a 4 KiB direct-mapped read cache in the ASMI
+adapter. A miss fetches the aligned 32-byte line (the VexRiscv instruction
+cache line) in one 8-word ASMI burst, and each word is served as soon as it
+arrives; a hit takes two cycles. A single-word ASMI read costs about 80 flash
+clocks, and the BIOS reads its boot image byte by byte (CRC with a table in
+flash, then `memcpy`), so the cache matters more than the burst itself:
+
+| Boot phase (403 KB Zephyr image) | Uncached | Cached |
+| --- | ---: | ---: |
+| Zephyr image CRC check | 1.44 s | 0.24 s |
+| Copy to SDRAM | 0.77 s | 0.11 s |
+| BIOS banner to Zephyr start | 3.94 s | 1.90 s |
+
+Storage writes invalidate their line and an erase flushes the cache. The
+adapter is verified in a Migen simulation against a model of the ASMI IP:
+
+```sh
+source ./litex_env.sh && "$PYTHON" sim/asmi_flash_tb.py
+```
+
 The VexRiscv `lite` instruction cache is required for responsive execution
 from ASMI XIP flash. The UART uses a 512-byte hardware FIFO and exports sticky
 RX framing/overflow status for diagnostics.

@@ -32,7 +32,7 @@ from litedram.phy import GENSDRPHY
 # ASMI flash ---------------------------------------------------------------------------------------
 
 class ASMIFlash(LiteXModule):
-    """Dedicated Active-Serial flash interface.
+    """Dedicated Active-Serial flash interface with a read cache.
 
     ``bus`` is the read-only XIP window used for BIOS fetches and Zephyr flash
     boot. The optional ``storage`` window maps only the mutable flash tail
@@ -40,89 +40,201 @@ class ASMIFlash(LiteXModule):
     ASMI IP turns every write into WREN + page program + busy polling. Erase
     is a CSR-driven engine restricted to the same tail, so software can not
     erase or program the configuration image, BIOS or Zephyr boot image.
+
+    A single-word ASMI read costs about 80 flash clocks, of which only 32 carry
+    data, and the BIOS reads its boot image byte by byte. Both windows are
+    therefore served from a direct-mapped read cache: a miss fetches its
+    aligned 32-byte line (the VexRiscv instruction-cache line) in one 8-word
+    Avalon burst, and every word is available as soon as it arrived. A hit
+    takes two cycles. Writes invalidate their line; an erase flushes the cache.
     """
     ERASE_SIZE = 4096 # W25Q16 subsector (opcode 0x20).
+    LINE_WORDS = 8    # 32-byte line, one 0x0B fast-read burst.
 
-    def __init__(self, platform, flash_offset, storage_offset=None, storage_size=0):
+    def __init__(self, platform, flash_offset, storage_offset=None, storage_size=0,
+        cache_lines=128):
         self.bus = wishbone.Interface(data_width=32, adr_width=19, mode="r")
         with_storage = storage_size > 0
 
-        avl_address       = Signal(19)
-        avl_read          = Signal()
-        avl_write         = Signal()
-        avl_writedata     = Signal(32)
-        avl_byteenable    = Signal(4)
-        avl_waitrequest   = Signal()
-        avl_readdata      = Signal(32)
-        avl_readdatavalid = Signal()
+        # Avalon-MM ports of the ASMI Parallel II IP. They are attributes so
+        # that the adapter can be simulated without the Intel IP.
+        self.avl_address       = avl_address       = Signal(19)
+        self.avl_read          = avl_read          = Signal()
+        self.avl_write         = avl_write         = Signal()
+        self.avl_burstcount    = avl_burstcount    = Signal(7)
+        self.avl_writedata     = avl_writedata     = Signal(32)
+        self.avl_byteenable    = avl_byteenable    = Signal(4)
+        self.avl_waitrequest   = avl_waitrequest   = Signal()
+        self.avl_readdata      = avl_readdata      = Signal(32)
+        self.avl_readdatavalid = avl_readdatavalid = Signal()
 
-        csr_address       = Signal(6)
-        csr_read          = Signal()
-        csr_write         = Signal()
-        csr_writedata     = Signal(32)
-        csr_readdata      = Signal(32)
-        csr_waitrequest   = Signal()
-        csr_readdatavalid = Signal()
+        self.csr_address       = csr_address       = Signal(6)
+        self.csr_read          = csr_read          = Signal()
+        self.csr_write         = csr_write         = Signal()
+        self.csr_writedata     = csr_writedata     = Signal(32)
+        self.csr_readdata      = csr_readdata      = Signal(32)
+        self.csr_waitrequest   = csr_waitrequest   = Signal()
+        self.csr_readdatavalid = csr_readdatavalid = Signal()
 
-        busy      = Signal() # A read has been accepted; waiting for its data.
-        owner     = Signal() # 0: XIP bus, 1: storage bus.
-        erasing   = Signal() # Erase engine owns the flash; memory port blocked.
-        xip_req   = self.bus.cyc & self.bus.stb
-        issue     = Signal()
-        grant     = Signal()
+        # Physical flash word address: 19 bits for the 2 MiB W25Q16.
+        word_bits  = log2_int(self.LINE_WORDS)
+        index_bits = log2_int(cache_lines)
+        line_lsb   = word_bits
+        tag_lsb    = word_bits + index_bits
+        tag_bits   = 19 - tag_lsb
 
-        # The ASMI Avalon port is word-addressed (the generated IP converts
-        # it to byte addresses itself). The SoC bus strips the region origin,
-        # so add only the flash offset expressed in 32-bit words.
+        erasing = Signal() # Erase engine owns the flash; memory port blocked.
+        flush   = Signal() # Invalidate the whole cache.
+
+        # Request mux ------------------------------------------------------------------------------
+        # XIP has priority; Zephyr executes from SDRAM, so contention only
+        # exists while the BIOS runs from flash, which never uses storage.
+        xip_req = self.bus.cyc & self.bus.stb
+        grant   = Signal() # 1: storage window.
+        req     = Signal()
+        req_we  = Signal()
+        req_adr = Signal(19)
+        # The SoC bus strips the region origin, so add only the flash offset
+        # expressed in 32-bit words.
         self.comb += [
-            issue.eq(~busy & ~erasing),
-            self.bus.dat_r.eq(avl_readdata),
-            self.bus.ack.eq(busy & ~owner & avl_readdatavalid),
+            req.eq(xip_req),
+            req_adr.eq(self.bus.adr + flash_offset//4),
         ]
-        self.sync += If(~busy,
-            If(avl_read & ~avl_waitrequest,
-                busy.eq(1),
-                owner.eq(grant),
-            )
-        ).Elif(avl_readdatavalid,
-            busy.eq(0)
-        )
-
-        if not with_storage:
-            self.comb += [
-                avl_address.eq(self.bus.adr + flash_offset//4),
-                avl_read.eq(xip_req & issue),
-                avl_byteenable.eq(0b1111),
-            ]
-        else:
+        if with_storage:
             assert storage_offset % self.ERASE_SIZE == 0
             assert storage_size % self.ERASE_SIZE == 0
             assert storage_size & (storage_size - 1) == 0
             self.storage = wishbone.Interface(data_width=32)
             storage_req  = self.storage.cyc & self.storage.stb
             storage_word = self.storage.adr[:log2_int(storage_size) - 2]
+            self.comb += If(~xip_req,
+                grant.eq(1),
+                req.eq(storage_req),
+                req_we.eq(self.storage.we),
+                req_adr.eq(storage_word + storage_offset//4),
+            )
 
-            # XIP has priority; Zephyr executes from SDRAM, so contention only
-            # exists while the BIOS runs from flash, which never uses storage.
+        # Cache arrays -----------------------------------------------------------------------------
+        data_mem = Memory(32, cache_lines*self.LINE_WORDS)
+        tag_mem  = Memory(tag_bits, cache_lines)
+        data_rd  = data_mem.get_port()
+        data_wr  = data_mem.get_port(write_capable=True)
+        tag_rd   = tag_mem.get_port()
+        tag_wr   = tag_mem.get_port(write_capable=True)
+        self.specials += data_mem, tag_mem, data_rd, data_wr, tag_rd, tag_wr
+        valid    = Array(Signal() for _ in range(cache_lines))
+
+        # Lookup: the arrays are read with the presented address; the result
+        # is used in the next cycle if the same request is still presented.
+        # A lookup sampled while the cache state changes is discarded.
+        ack       = Signal()
+        inval     = Signal()
+        p_valid   = Signal()
+        p_adr     = Signal(19)
+        p_grant   = Signal()
+        p_line_ok = Signal()
+        p_fill_ok = Signal()
+        same      = Signal()
+        tag_hit   = Signal()
+        hit       = Signal()
+
+        filling    = Signal()
+        fill_line  = Signal(19 - line_lsb)
+        fill_count = Signal(word_bits + 1)
+        fill_done  = Signal()
+        start_fill = Signal()
+        write_ack  = Signal()
+
+        self.comb += [
+            data_rd.adr.eq(req_adr[:tag_lsb]),
+            tag_rd.adr.eq(req_adr[line_lsb:tag_lsb]),
+        ]
+        self.sync += [
+            p_valid.eq(req & ~req_we & ~ack & ~inval),
+            p_adr.eq(req_adr),
+            p_grant.eq(grant),
+            p_line_ok.eq(valid[req_adr[line_lsb:tag_lsb]]),
+            # Words of the line being filled become readable one by one.
+            p_fill_ok.eq(filling & (req_adr[line_lsb:] == fill_line) &
+                         (req_adr[:word_bits] < fill_count)),
+        ]
+        self.comb += [
+            same.eq(p_valid & req & ~req_we & (req_adr == p_adr) & (grant == p_grant)),
+            tag_hit.eq(p_line_ok & (tag_rd.dat_r == p_adr[tag_lsb:])),
+            hit.eq(same & (tag_hit | p_fill_ok)),
+            start_fill.eq(same & ~hit & ~filling & ~erasing),
+            inval.eq(start_fill | fill_done | write_ack | flush),
+            ack.eq(hit | write_ack),
+            self.bus.dat_r.eq(data_rd.dat_r),
+            self.bus.ack.eq(hit & ~p_grant),
+        ]
+
+        # Line fill --------------------------------------------------------------------------------
+        self.fill = fill = FSM(reset_state="IDLE")
+        fill.act("IDLE",
+            If(start_fill,
+                tag_wr.we.eq(1),
+                NextValue(fill_line, p_adr[line_lsb:]),
+                NextValue(fill_count, 0),
+                NextState("CMD")
+            )
+        )
+        fill.act("CMD",
+            filling.eq(1),
+            avl_read.eq(1),
+            If(~avl_waitrequest, NextState("DATA"))
+        )
+        fill.act("DATA",
+            filling.eq(1),
+            If(avl_readdatavalid,
+                data_wr.we.eq(1),
+                NextValue(fill_count, fill_count + 1),
+                If(fill_count == self.LINE_WORDS - 1,
+                    fill_done.eq(1),
+                    NextState("IDLE")
+                )
+            )
+        )
+        self.comb += [
+            tag_wr.adr.eq(p_adr[line_lsb:tag_lsb]),
+            tag_wr.dat_w.eq(p_adr[tag_lsb:]),
+            data_wr.adr.eq(Cat(fill_count[:word_bits], fill_line[:index_bits])),
+            data_wr.dat_w.eq(avl_readdata),
+        ]
+        for i in range(cache_lines):
+            self.sync += If(flush,
+                valid[i].eq(0)
+            ).Elif(fill_done & (fill_line[:index_bits] == i),
+                valid[i].eq(1)
+            ).Elif(start_fill & (p_adr[line_lsb:tag_lsb] == i),
+                valid[i].eq(0)
+            ).Elif(write_ack & (req_adr[line_lsb:tag_lsb] == i),
+                valid[i].eq(0)
+            )
+
+        # Avalon mux: a line fill, or a single storage write.
+        self.comb += [
+            If(filling,
+                avl_address.eq(Cat(Constant(0, word_bits), fill_line)),
+                avl_burstcount.eq(self.LINE_WORDS),
+                avl_byteenable.eq(0b1111),
+            ).Else(
+                avl_address.eq(req_adr),
+                avl_burstcount.eq(1),
+                avl_byteenable.eq(self.storage.sel if with_storage else 0b1111),
+            ),
+        ]
+
+        if with_storage:
+            # A write is acknowledged when the IP accepts it. The IP then
+            # holds waitrequest until the flash finished programming, so the
+            # next flash access waits instead of reading a busy flash.
             self.comb += [
-                grant.eq(~xip_req),
-                If(grant,
-                    avl_address.eq(storage_word + storage_offset//4),
-                    avl_read.eq(storage_req & ~self.storage.we & issue),
-                    avl_write.eq(storage_req & self.storage.we & issue),
-                    avl_byteenable.eq(self.storage.sel),
-                ).Else(
-                    avl_address.eq(self.bus.adr + flash_offset//4),
-                    avl_read.eq(issue),
-                    avl_byteenable.eq(0b1111),
-                ),
+                avl_write.eq(fill.ongoing("IDLE") & req & req_we & ~erasing),
+                write_ack.eq(avl_write & ~avl_waitrequest),
                 avl_writedata.eq(self.storage.dat_w),
-                self.storage.dat_r.eq(avl_readdata),
-                # A write is acknowledged when the IP accepts it. The IP then
-                # holds waitrequest until the flash finished programming, so
-                # the next flash access waits instead of reading a busy flash.
-                self.storage.ack.eq((busy & owner & avl_readdatavalid) |
-                                    (avl_write & ~avl_waitrequest)),
+                self.storage.dat_r.eq(data_rd.dat_r),
+                self.storage.ack.eq((hit & p_grant) | write_ack),
             ]
 
             # Erase engine -------------------------------------------------------------------------
@@ -143,11 +255,16 @@ class ASMIFlash(LiteXModule):
                     NextState("WAIT-MEM")
                 )
             )
-            # Let a pending read or programming operation finish first, then
+            # Let a line fill or programming operation finish first, then
             # block new memory-port requests until the flash is idle again.
+            # No line can be filled from here on, so flushing the cache now
+            # also covers the erased block.
             fsm.act("WAIT-MEM",
                 erasing.eq(1),
-                If(~busy & ~avl_waitrequest, NextState("WREN"))
+                If(fill.ongoing("IDLE") & ~avl_waitrequest,
+                    flush.eq(1),
+                    NextState("WREN")
+                )
             )
             fsm.act("WREN",
                 erasing.eq(1),
@@ -182,6 +299,8 @@ class ASMIFlash(LiteXModule):
             )
             self.comb += self.status.fields.busy.eq(~fsm.ongoing("IDLE"))
 
+        if platform is None: # Simulation.
+            return
         ip_dir = os.path.join(os.path.dirname(__file__), "ip", "asmi_xip")
         platform.add_ip(os.path.join(ip_dir, "asmi_xip.qip"))
         self.specials += Instance("asmi_xip",
@@ -195,7 +314,7 @@ class ASMIFlash(LiteXModule):
             o_avl_csr_waitrequest       = csr_waitrequest,
             o_avl_csr_readdatavalid     = csr_readdatavalid,
             i_avl_mem_write             = avl_write,
-            i_avl_mem_burstcount        = Constant(1, 7),
+            i_avl_mem_burstcount        = avl_burstcount,
             i_avl_mem_read              = avl_read,
             i_avl_mem_address           = avl_address,
             i_avl_mem_writedata         = avl_writedata,
