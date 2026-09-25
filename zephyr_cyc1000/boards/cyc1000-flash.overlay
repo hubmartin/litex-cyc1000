@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * LittleFS in the last 256 KiB of the W25Q16 (physical 0x1c0000..0x1fffff).
+ * Addresses are substituted by scripts/generate-dts-overlay.sh from csr.json.
+ */
+/ {
+	asmi_controller: flash-controller@@ASMI_ERASE@ {
+		compatible = "cyc1000,asmi-flash-controller";
+		reg = <@ASMI_ERASE_ADDR@ 0x4>, <@ASMI_STATUS_ADDR@ 0x4>;
+		reg-names = "erase", "status";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		storage_flash: flash@@STORAGE@ {
+			compatible = "soc-nv-flash";
+			reg = <@STORAGE_ADDR@ @STORAGE_SIZE@>;
+			erase-block-size = <4096>;
+			write-block-size = <1>;
+
+			partitions {
+				compatible = "fixed-partitions";
+				#address-cells = <1>;
+				#size-cells = <1>;
+
+				storage_partition: partition@0 {
+					label = "storage";
+					reg = <0x0 @STORAGE_SIZE@>;
+				};
+			};
+		};
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs_storage: lfs_storage {
+			compatible = "zephyr,fstab,littlefs";
+			mount-point = "/lfs";
+			partition = <&storage_partition>;
+			automount;
+			read-size = <16>;
+			prog-size = <16>;
+			cache-size = <256>;
+			lookahead-size = <32>;
+			block-cycles = <512>;
+		};
+	};
+};
+
+/* The LiteX base DTS describes a LiteSPI flash that this SoC does not have;
+ * the configuration flash is only reachable through the ASMI hard block.
+ */
+&spiflash0 {
+	status = "disabled";
+};

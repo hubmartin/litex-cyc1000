@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+source "Kconfig.zephyr"
+
+config CYC1000_ASMI_FLASH
+	bool "CYC1000 ASMI storage flash driver"
+	default y
+	depends on DT_HAS_CYC1000_ASMI_FLASH_CONTROLLER_ENABLED
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_EXPLICIT_ERASE
+	select FLASH_HAS_PAGE_LAYOUT
+	help
+	  Flash driver for the writable SPI flash tail exposed by the LiteX
+	  ASMI storage window and erase engine.

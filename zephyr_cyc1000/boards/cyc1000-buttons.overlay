@@ -8,13 +8,13 @@
 		sw0 = &button0;
 	};
 
-	buttons_gpio: gpio@f0000000 {
+	buttons_gpio: gpio@@BUTTONS_IN@ {
 		compatible = "litex,gpio";
-		reg = <0xf0000000 0x4>,
-		      <0xf0000004 0x4>,
-		      <0xf0000008 0x4>,
-		      <0xf0000010 0x4>,
-		      <0xf0000014 0x4>;
+		reg = <@BUTTONS_IN_ADDR@ 0x4>,
+		      <@BUTTONS_MODE_ADDR@ 0x4>,
+		      <@BUTTONS_EDGE_ADDR@ 0x4>,
+		      <@BUTTONS_EV_PENDING_ADDR@ 0x4>,
+		      <@BUTTONS_EV_ENABLE_ADDR@ 0x4>;
 		reg-names = "in", "irq_mode", "irq_edge", "irq_pend", "irq_en";
 		gpio-controller;
 		#gpio-cells = <2>;

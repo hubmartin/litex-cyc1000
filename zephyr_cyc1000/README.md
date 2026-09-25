@@ -101,6 +101,37 @@ The script writes and verifies FPGA configuration at offset 0, LiteX BIOS at
 0x00100000 and Zephyr at 0x00120000. It then loads the bitstream into SRAM,
 so the result is active immediately and also after power reset.
 
+## LittleFS storage
+
+The last 256 KiB of the W25Q16 hold a LittleFS file system, mounted
+automatically at `/lfs` (formatted on first boot if empty):
+
+| Flash offset | Size | Content |
+| --- | ---: | --- |
+| 0x000000 | < 1 MiB | FPGA configuration (RBF) |
+| 0x100000 | 128 KiB | LiteX BIOS (XIP) |
+| 0x120000 | ≤ 640 KiB | Zephyr FBI boot image |
+| 0x1c0000 | 256 KiB | LittleFS (`storage_partition`) |
+
+The gateware (`--with-flash-storage`) exposes only this tail as an uncached,
+writable window at `0x90000000`; the ASMI IP performs write enable, page
+program and busy polling for every store. A 4 KiB erase is started through
+the `asmi_erase` CSR, and the gateware refuses offsets outside the tail, so
+Zephyr can not overwrite the configuration image, BIOS or boot image.
+`scripts/flash.sh` never writes the tail and rejects a Zephyr image that
+would reach it, so files survive reflashing.
+
+`src/asmi_flash.c` is the Zephyr flash driver for this window. The CSR and
+window addresses are generated into `boards/cyc1000-flash.generated.overlay`
+by `scripts/generate-dts-overlay.sh`. Use the shell to inspect it:
+
+    fs ls /lfs
+    fs statvfs /lfs
+    flash page_info flash-controller@f0000000 0
+
+Measured throughput through LittleFS: about 49 KiB/s for writes including
+erases and about 250 KiB/s for read and verify.
+
 `kernel reboot` in the Zephyr shell is also supported. The LiteX SoC reset
 resets the system logic while keeping the Cyclone 10 LP PLL running; this
 avoids an unreliable PLL relock from the one-cycle software-reset request.

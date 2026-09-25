@@ -68,6 +68,11 @@ because the temporary SPI-over-JTAG programmer does not reconfigure the FPGA
 after writing. To use a different serial device, set `LITEX_UART`, for
 example `LITEX_UART=/dev/ttyUSB2 ./console.sh`.
 
+`--with-flash-storage` (used by the Zephyr gateware scripts) additionally
+maps the last 256 KiB of the flash (0x1c0000..0x1fffff) as a writable,
+uncached `storage` region at `0x90000000` with an `asmi_erase`/`asmi_status`
+4 KiB erase engine restricted to that range. The XIP window stays read-only.
+
 The VexRiscv `lite` instruction cache is required for responsive execution
 from ASMI XIP flash. The UART uses a 512-byte hardware FIFO and exports sticky
 RX framing/overflow status for diagnostics.

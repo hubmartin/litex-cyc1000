@@ -10,12 +10,13 @@ bios="$litex_dir/$litex_build/software/bios/bios.bin"
 zephyr_image="$project_dir/build/zephyr/zephyr.fbi"
 readonly bios_offset=1048576       # 0x00100000
 readonly zephyr_offset=1179648     # 0x00120000
-readonly flash_size=2097152        # W25Q16: 2 MiB
+readonly storage_offset=1835008    # 0x001c0000: LittleFS, last 256 KiB
 
 [[ -f "$gateware" && -f "$bios" && -f "$zephyr_image" ]]
 [[ $(stat -c%s "$gateware") -le "$bios_offset" ]]
 [[ $((bios_offset + $(stat -c%s "$bios"))) -le "$zephyr_offset" ]]
-[[ $((zephyr_offset + $(stat -c%s "$zephyr_image"))) -le "$flash_size" ]]
+# The LittleFS tail is never written here, so its files survive reflashing.
+[[ $((zephyr_offset + $(stat -c%s "$zephyr_image"))) -le "$storage_offset" ]]
 
 # Each write is read back. The final SRAM load activates the new image now;
 # later power resets use the same persisted configuration and boot image.

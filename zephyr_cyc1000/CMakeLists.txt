@@ -5,3 +5,4 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(zephyr_cyc1000)
 
 target_sources(app PRIVATE src/main.c)
+target_sources_ifdef(CONFIG_CYC1000_ASMI_FLASH app PRIVATE src/asmi_flash.c)

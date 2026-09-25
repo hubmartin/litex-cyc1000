@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  CYC1000 LiteX ASMI storage controller. The child soc-nv-flash node is the
+  uncached, writable LiteX "storage" window over the SPI flash tail; the
+  controller registers are the LiteX asmi_erase and asmi_status CSRs.
+
+compatible: "cyc1000,asmi-flash-controller"
+
+include: flash-controller.yaml
+
+properties:
+  reg:
+    required: true
+  reg-names:
+    required: true
